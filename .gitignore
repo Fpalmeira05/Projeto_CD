@@ -1,0 +1,15 @@
+# Ignorar pastas de datasets e ficheiros de dados pesados
+02_datasets/
+*.csv
+*.xlsx
+*.parquet
+
+# Ignorar ficheiros temporários do Python e Jupyter Notebooks
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Ignorar ambientes virtuais (caso cries um)
+venv/
+env/
+.env
