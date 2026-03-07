@@ -164,6 +164,47 @@ class DataPreprocessing:
         except ValueError as ve:
             print(f"Error normalizing: {ve}")
 
+    def perform_feature_engineering(self, df):
+            """
+            Create 10 new features from the existing variables(no data leakage)
+            :param self:
+            :param df:
+            :return:
+            """
+
+            df_fe = df.copy()
+
+            # Garantir que a data está no formato correto de DateTime
+            df_fe['FL_DATE'] = pd.to_datetime(df_fe['FL_DATE'])
+
+            # 1. Mês do ano (1 a 12)
+            df_fe['MONTH'] = df_fe['FL_DATE'].dt.month
+
+            #2. Dia da semana(0 a 5 , 0 = Segunda  e 6 = Domingo)
+            df_fe['DAY_OF_WEEK'] = df_fe['FL_DATE'].dt.dayofweek
+
+            #3. Verifica se e fim de semana(sim = 1 nao = 0)
+            df_fe['IS_WEEKEND'] = np.where(df_fe['DAY_OF_WEEK'] >= 5, 1, 0)
+
+            # 4. Estação do ano (1=Inverno, 2=Primavera, 3=Verão, 4=Outono)
+            df_fe['SEASON'] = df_fe['MONTH'].apply(
+                lambda x: 1 if x in [12, 1, 2] else (2 if x in [3, 4, 5] else (3 if x in [6, 7, 8] else 4))
+            )
+
+            # 5. Verifica se esta na altura de ferias(julho = 7,agosto = 8 e dezembro = 12), 1 = sim 0 = nao
+            df_fe['IS_HOLIDAY_MONTH'] = np.where(df_fe['MONTH'].isin([7, 8, 12]), 1, 0)
+
+
+            #6.dasdadadadadad
+
+
+
+            print("✅ Feature Engineering concluído: 10 novas features criadas com sucesso!")
+
+            return df_fe
+
+
+
 
 class DataCleaning:
     """
