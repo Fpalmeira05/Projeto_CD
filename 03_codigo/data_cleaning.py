@@ -8,10 +8,11 @@ import numpy as np
 
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import mutual_info_classif
+from sklearn.manifold import TSNE
 
 from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestRegressor # predict a continuous scale of numbers, better than classifier who just understands labels
-
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -21,6 +22,7 @@ from itertools import combinations_with_replacement
 from scipy.stats import f_oneway, kruskal, ttest_ind
 
 import pickle
+import umap
 
 import math
 
@@ -550,7 +552,107 @@ class EDA:
 
 eda = EDA(data_loader,num_cols,cat_cols)
 eda.perform_eda()
+#%% Dimension Reduction
 
+class FlightDimensionalityReduction:
+    """
+    Adapted DimensionalityReduction class for the Flight Delay dataset.
+    """
+
+    def __init__(self, data_loader, features_to_use, sample_size=10000):
+        """
+        Initialize the object with a safe random sample of the dataset.
+        """
+        self.data_loader = data_loader
+
+        print(f"Sampling {sample_size} rows for dimensionality reduction...")
+        actual_sample_size = min(sample_size, len(self.data_loader.data_train))
+
+        # Isolate the preprocessed features
+        self.X_sample = self.data_loader.data_train[features_to_use].sample(n=actual_sample_size, random_state=42)
+        self.y_sample = self.data_loader.labels_train.loc[self.X_sample.index]
+
+        # Create a binary label for clear visual clustering (1 = Delayed > 15 mins, 0 = On Time)
+        self.y_binary = (self.y_sample > 15).astype(int)
+
+    def compute_pca(self, n_components=2):
+        """
+        Compute Principal Component Analysis (PCA) on the dataset.
+        """
+        print("Computing PCA (Linear Method)...")
+        return PCA(n_components=n_components).fit_transform(self.X_sample)
+
+    def compute_lda(self, n_components=2):
+        """
+        Perform Linear Discriminant Analysis (LDA) on the input data.
+
+        Parameters:
+        - n_components: The number of components to keep
+
+        Returns:
+            array-like: The reduced-dimensional representation of the data using LDA.
+        """
+        return LinearDiscriminantAnalysis(n_components=n_components).fit_transform(self.data, self.targets)
+
+
+    def compute_umap(self, n_components=2, n_neighbors=15, min_dist=0.1):
+        """
+        Compute Uniform Manifold Approximation and Projection (UMAP).
+        """
+        print("Computing UMAP (Non-Linear Method)...")
+        return umap.UMAP(n_components=n_components, n_neighbors=n_neighbors, min_dist=min_dist,
+                         random_state=42).fit_transform(self.X_sample)
+
+    def compute_tsne(self, n_components=2, perplexity=30):
+        """
+        Compute t-SNE (Included as a non-linear backup in case UMAP fails).
+        """
+        print("Computing t-SNE (Non-Linear Method)...")
+        return TSNE(n_components=n_components, perplexity=perplexity, random_state=42).fit_transform(self.X_sample)
+
+    def plot_projection(self, projection, title):
+        """
+        Plot the 2D projection of the dataset.
+        """
+        plt.figure(figsize=(10, 8))
+
+        # We use seaborn instead of standard matplotlib to easily map our binary labels to colors
+        scatter = sns.scatterplot(
+            x=projection[:, 0],
+            y=projection[:, 1],
+            hue=self.y_binary,
+            palette={0: 'blue', 1: 'red'},  # Blue = On time, Red = Delayed
+            alpha=0.6,
+            s=20
+        )
+
+        # Customize the legend to read "On Time" and "Delayed" instead of 0 and 1
+        handles, _ = scatter.get_legend_handles_labels()
+        plt.legend(handles=handles, title='Flight Status', labels=['On Time (<=15m)', 'Delayed (>15m)'])
+
+        plt.title(title)
+        plt.xlabel('Component 1')
+        plt.ylabel('Component 2')
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+# 1. Combine your preprocessed columns so the algorithm knows what to look at
+features_to_use = num_cols + cat_cols
+
+# 2. Initialize the class (it automatically samples the data)
+dr = FlightDimensionalityReduction(data_loader, features_to_use)
+
+# 3. Compute and plot PCA (Linear)
+pca_proj = dr.compute_pca()
+dr.plot_projection(pca_proj, 'PCA Projection (Linear)')
+
+# 4. Compute and plot UMAP (Non-Linear)
+umap_proj = dr.compute_umap()
+dr.plot_projection(umap_proj, 'UMAP Projection (Non-Linear)')
+
+tsne_proj = dr.compute_tsne()
+dr.plot_projection(tsne_proj, 'TSNE Projection (Non-Linear)')
 
 
 
