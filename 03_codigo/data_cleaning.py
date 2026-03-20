@@ -68,28 +68,136 @@ class DataLoader:
         self._load_data()
 
     def _load_data(self):
+        """
+        Loads the dataset, validates it, splits into train/test,
+        and assigns the data and labels to the appropriate attributes.
+        """
+        import os
+
+        # 1. Validate filename
+        if not isinstance(self.filename, str) or not self.filename.strip():
+            raise ValueError("Filename must be a non-empty string.")
+
+        # 2. Check file extension
+        if not self.filename.lower().endswith('.csv'):
+            raise ValueError(f"Expected a .csv file, got: '{self.filename}'")
+
+        # 3. Check if file exists
+        if not os.path.isfile(self.filename):
+            raise FileNotFoundError(f"File not found: '{self.filename}'. Please check the file path.")
+
+        # 4. Check if file is empty (0 bytes)
+        if os.path.getsize(self.filename) == 0:
+            raise ValueError(f"File is empty: '{self.filename}'")
+
+        # 5. Validate split parameters
+        if not (0 < self.test_size < 1):
+            raise ValueError(f"test_size must be between 0 and 1 (exclusive), got: {self.test_size}")
+
+        if not isinstance(self.random_state, int) or self.random_state < 0:
+            raise ValueError(f"random_state must be a non-negative integer, got: {self.random_state}")
+
+        # 6. Read the CSV
         try:
-            # Load the dataset
             df = pd.read_csv(self.filename, low_memory=False)
-            print(f"Original shape: {df.shape}")
+        except pd.errors.EmptyDataError:
+            raise ValueError(f"File has no data to parse: '{self.filename}'")
+        except pd.errors.ParserError as e:
+            raise ValueError(f"Error parsing CSV file: {e}")
+        except UnicodeDecodeError as e:
+            raise ValueError(f"Encoding error reading file (try specifying encoding): {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error reading file: {e}")
 
-            # "Cancelled or diverted flights do not have meaningful arrival delay values"
-            df = df[(df['CANCELLED'] == 0) & (df['DIVERTED'] == 0)]
-            print(f"Shape after removing cancelled/diverted: {df.shape}")
+        print(f"Original shape: {df.shape}")
 
-            #Target (y) and Features (X)
-            y = df['ARR_DELAY']
-            X = df.drop(columns=['ARR_DELAY'])
+        # 7. Check if DataFrame is empty
+        if df.empty:
+            raise ValueError("The loaded DataFrame is empty (0 rows).")
 
-            # Split the data
+
+        # 8. Check for required columns
+        required_columns = ['ARR_DELAY', 'CANCELLED', 'DIVERTED']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise KeyError(f"Missing required columns: {missing_columns}. "
+                           f"Available columns: {list(df.columns)}")
+
+        # 9. Validate data types of key columns
+        for col in ['ARR_DELAY', 'CANCELLED', 'DIVERTED']:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                raise TypeError(f"Column '{col}' must be numeric, got dtype: {df[col].dtype}")
+
+        # 10. Check for valid CANCELLED/DIVERTED values (should be 0 or 1)
+        for col in ['CANCELLED', 'DIVERTED']:
+            unique_vals = df[col].dropna().unique()
+            invalid_vals = [v for v in unique_vals if v not in [0, 1]]
+            if invalid_vals:
+                print(f"Warning: Column '{col}' contains unexpected values: {invalid_vals}. "
+                      f"Expected only 0 and 1.")
+
+        # 11. Filter out cancelled and diverted flights
+        df = df[(df['CANCELLED'] == 0) & (df['DIVERTED'] == 0)]
+        print(f"Shape after removing cancelled/diverted: {df.shape}")
+
+        # 12. Check if any rows remain after filtering
+        if df.empty:
+            raise ValueError("No rows remaining after filtering cancelled/diverted flights. "
+                             "All flights are either cancelled or diverted.")
+
+        # 13. Check for target variable issues
+        if df['ARR_DELAY'].isnull().all():
+            raise ValueError("Target column 'ARR_DELAY' has no valid (non-null) values.")
+
+        null_target_count = df['ARR_DELAY'].isnull().sum()
+        if null_target_count > 0:
+            print(f"Warning: 'ARR_DELAY' has {null_target_count} null values "
+                  f"({null_target_count / len(df) * 100:.2f}%). These rows will be dropped.")
+            df = df.dropna(subset=['ARR_DELAY'])
+
+        # 14. Check if enough rows exist for splitting
+        min_rows_needed = max(int(1 / self.test_size), int(1 / (1 - self.test_size)), 2)
+        if len(df) < min_rows_needed:
+            raise ValueError(f"Not enough rows ({len(df)}) to split with test_size={self.test_size}. "
+                             f"Need at least {min_rows_needed} rows.")
+
+        # 15. Separate target and features
+        y = df['ARR_DELAY']
+        X = df.drop(columns=['ARR_DELAY'])
+
+        # 16. Check if there are any features left
+        if X.shape[1] == 0:
+            raise ValueError("No feature columns remain after removing 'ARR_DELAY'.")
+
+        # 17. Report duplicate info
+        n_duplicates = X.duplicated().sum()
+        if n_duplicates > 0:
+            print(f"Info: Dataset contains {n_duplicates} duplicate rows "
+                  f"({n_duplicates / len(X) * 100:.2f}%). Consider removing them later.")
+
+        # 18. Report missing values info
+        total_missing = X.isnull().sum().sum()
+        if total_missing > 0:
+            cols_with_missing = X.columns[X.isnull().any()].tolist()
+            print(f"Info: {total_missing} missing values found across columns: {cols_with_missing}")
+
+        # 19. Perform the train/test split
+        try:
             self.data_train, self.data_test, self.labels_train, self.labels_test = train_test_split(
                 X, y, test_size=self.test_size, random_state=self.random_state
             )
+        except Exception as e:
+            raise RuntimeError(f"Error during train/test split: {e}")
 
-            print("Data loaded and split successfully.")
+        # 20. Final validation
+        assert len(self.data_train) > 0, "Training set is empty after split."
+        assert len(self.data_test) > 0, "Test set is empty after split."
+        assert len(self.data_train) == len(self.labels_train), "Train data/labels size mismatch."
+        assert len(self.data_test) == len(self.labels_test), "Test data/labels size mismatch."
 
-        except FileNotFoundError:
-            print("File not found. Please check the file path.")
+        print(f"Data loaded and split successfully.")
+        print(f"  Train: {self.data_train.shape[0]} rows, {self.data_train.shape[1]} features")
+        print(f"  Test:  {self.data_test.shape[0]} rows, {self.data_test.shape[1]} features")
 
 
 class DataPreprocessing:
