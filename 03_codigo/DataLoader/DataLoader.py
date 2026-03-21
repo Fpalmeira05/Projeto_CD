@@ -24,9 +24,9 @@ class DataLoader:
         Initializes the DataLoader with the filename of the dataset,
         the proportion of data to include in the test split,
         and the random state for reproducibility.
-        :param filename:
-        :param test_size:
-        :param random_state:
+        :param filename: filename of the Flight dataset.
+        :param test_size: The size of the test split.
+        :param random_state: The random state for reproducibility.
         """
         self.filename = filename
         self.test_size = test_size
@@ -40,6 +40,12 @@ class DataLoader:
         self._load_data()
 
     def _load_data(self):
+
+        """
+        Loads the dataset from the specified filename,
+        splits it into training and testing sets using train_test_split(),
+        and assigns the data and labels to the appropriate attributes.
+        """
         try:
             # Load the dataset
             df = pd.read_csv(self.filename, low_memory=False)

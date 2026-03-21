@@ -1,13 +1,13 @@
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, LabelEncoder, MinMaxScaler
 
-
-
-
 class DataPreprocessing:
     """
     Class responsible for encoding and normalizing the loaded dataset. Transforms the categorical data in numerical
-
+    Attributes:
+        data_loader (DataLoader): An object of the DataLoader class.
+        numerical_cols (list): list of numerical column names
+        categorical_cols (list): list of categorical column names
     Methods:
         _encode_categorical(): Normalizes all features that are categorical into numerical
         _normalize_features(): Normalizes numerical features using StandardScaler for Numerical and MinMaxScaler for categorical

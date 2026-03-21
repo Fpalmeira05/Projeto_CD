@@ -3,10 +3,20 @@
 class DataCleaning:
     """
     Class for cleaning operations.
+
+    Methods:
+        remove_duplicates(): Remove duplicate rows from the dataset.
+        handle_missing_values(strategy='mean'): Handle missing values using the specified strategy.
+        detect_outliers(): Detect outliers in numerical features.
+        remove_outliers(threshold=3): Remove outliers from the dataset
+        remove_leakage(): Removes columns that cause data leakage as defined in the project specs.
     """
 
     def __init__(self, data_loader):
         self.data_loader = data_loader
+        """
+        Initializes the DataCleaning class with a DataLoader object.
+        """
 
     def remove_duplicates(self):
         """

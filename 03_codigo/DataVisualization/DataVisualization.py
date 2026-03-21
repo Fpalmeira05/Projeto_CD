@@ -1,23 +1,19 @@
 import pandas as pd
-
-
-
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance
 import math
 import seaborn as sns
 import matplotlib.pyplot as plt
-
-
 class DataVisualization:
     """
     A class responsible for data visualization.
-
     Attributes:
         data_loader (DataLoader): An object of the DataLoader class containing the dataset.
-
+        features_to_use (list): list of features to use for plotting.
     Methods:
         perform_visualization(): Performs data visualization.
+        plot_boxplot(sample_size=100000): Plots boxplot for all selected features using a safe subsample.
+        plot_ridgeplot(sample_size = 100000): Plots overlapping densities (ridge plot).
     """
     def __init__(self, data_loader, features_to_use):
         """
@@ -35,12 +31,12 @@ class DataVisualization:
         print("Data Visualization Plots:")
 
         # Boxplot
-        self.plot_boxplot()
+        self._plot_boxplot()
 
         # Ridgeplot
-        self.plot_ridgeplot()
+        self._plot_ridgeplot()
 
-    def plot_boxplot(self, sample_size=100000):
+    def _plot_boxplot(self, sample_size=100000):
         """
         Plots boxplot for all selected features using a safe subsample.
         """
@@ -65,7 +61,7 @@ class DataVisualization:
         plt.tight_layout()
         plt.show()
 
-    def plot_ridgeplot(self, sample_size=10000):
+    def _plot_ridgeplot(self, sample_size=10000):
         """
         Plots overlapping densities (ridge plot) for all features.
         KDE is mathematically heavy, so we use a smaller default sample size.

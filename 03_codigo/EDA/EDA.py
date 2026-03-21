@@ -11,9 +11,10 @@ import matplotlib.pyplot as plt
 class EDA:
     """
     A class responsible for exploratory data analysis.
-
     Attributes:
         data_loader (DataLoader): Object containing the dataset.
+        num_cols : The numerical columns in the dataset.
+        cat_cols : The categorical columns in the dataset.
 
     Methods:
         perform_eda(): Performs exploratory data analysis.
@@ -46,17 +47,17 @@ class EDA:
 
         # Distribution analysis
         print("\nDistribution Analysis:")
-        self.plot_distributions()
+        self._plot_distributions()
 
         # Correlation analysis
         print("\nCorrelation Analysis:")
-        self.plot_correlation_heatmap()
+        self._plot_correlation_heatmap()
 
         # Feature Importance analysis
         print("\nFeature Importance Analysis:")
-        self.plot_feature_importance()
+        self._plot_feature_importance()
 
-    def plot_distributions(self, sample_size = 100000, cols = 3):
+    def _plot_distributions(self, sample_size = 100000, cols = 3):
         """
         Plots distributions of the features.
         """
@@ -87,7 +88,7 @@ class EDA:
         plt.tight_layout()
         plt.show()
 
-    def plot_correlation_heatmap(self):
+    def _plot_correlation_heatmap(self):
         """
         Plots a correlation heatmap between numerical features and labels.
         """
@@ -105,7 +106,7 @@ class EDA:
         plt.tight_layout()
         plt.show()
 
-    def plot_feature_importance(self, n_estimators=10, n_repeats=2, sample_size=50000):
+    def _plot_feature_importance(self, n_estimators=10, n_repeats=2, sample_size=50000):
         """
         Computes and visualizes feature importance using permutation importance
         on a subsample of the data to save memory and time.

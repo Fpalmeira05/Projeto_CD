@@ -9,7 +9,13 @@ import math
 
 class FlightDimensionalityReduction:
     """
-    Adapted DimensionalityReduction class for the Flight Delay dataset.
+    Class responsible for the dimension reduction for the Flight Delay dataset.
+
+    Attributes:
+        data_loader (DataLoader): Object containing the dataset.
+        features_to_use : features to use for dimensionality reduction.
+        sample_size: Sample of the dataset.
+
     """
 
     def __init__(self, data_loader, features_to_use, sample_size=10000):

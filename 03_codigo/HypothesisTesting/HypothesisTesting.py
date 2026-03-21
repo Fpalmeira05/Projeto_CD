@@ -7,6 +7,9 @@ class HypothesisTesting:
     """
     A class to perform statistical Hypothesis Testing on categorical features
     against a continuous target variable (ARR_DELAY).
+
+    Attributes:
+        data_loader(DataLoader): the DataLoader class to load the data.
     """
 
     def __init__(self, data_loader):

@@ -1,10 +1,8 @@
 import pandas as pd
 import numpy as np
 
-
-
-
 class FeatureEngineering:
+
     def perform_feature_engineering(self, df):
             """
             Create 10 new features from the existing variables(no data leakage)
