@@ -57,7 +57,7 @@ class EDA:
         print("\nFeature Importance Analysis:")
         self._plot_feature_importance()
 
-    def _plot_distributions(self, sample_size = 100000, cols = 3):
+    def _plot_distributions(self, sample_size = 3000000, cols = 3):
         """
         Plots distributions of the features.
         """
@@ -106,7 +106,7 @@ class EDA:
         plt.tight_layout()
         plt.show()
 
-    def _plot_feature_importance(self, n_estimators=10, n_repeats=2, sample_size=50000):
+    def _plot_feature_importance(self, n_estimators=10, n_repeats=2, sample_size=100000):
         """
         Computes and visualizes feature importance using permutation importance
         on a subsample of the data to save memory and time.

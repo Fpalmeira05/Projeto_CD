@@ -60,19 +60,23 @@ print("Testing labels shape:", data_loader.labels_test.shape)
 # 1. Aplicar a função aos dados de Treino e Teste
 print("A processar Feature Engineering...")
 fe = FeatureEngineering()
-data_loader.data_train = fe.perform_feature_engineering(data_loader.data_train)
-data_loader.data_test = fe.perform_feature_engineering(data_loader.data_test)
-
+data_loader.data_train = fe.perform_feature_engineering(
+    data_loader.data_train,
+    target=data_loader.labels_train
+)
+data_loader.data_test = fe.perform_feature_engineering(
+    data_loader.data_test
+)
 # 2. Definir a lista das colunas novas para filtrar a tabela
 novas_colunas = [
-    'FL_DATE','MONTH','IS_HOLIDAY_MONTH','DAY_OF_WEEK','IS_WEEKEND','SEASON','CRS_DEP_HOUR','TIME_OF_DAY','FLIGHT_TYPE','ROUTE','CRS_ARR_HOUR','PLANNED_SPEED'
+    'FL_DATE','MONTH','IS_HOLIDAY_MONTH','DAY_OF_WEEK','IS_WEEKEND','SEASON','CRS_DEP_HOUR','TIME_OF_DAY','FLIGHT_TYPE','ROUTE','CRS_ARR_HOUR','PLANNED_SPEED','AVG_DELAY_PER_HOUR'
 ]
 # 3. Visualizar o resultado!
 print("\n--- Novas Features (Primeiras 5 linhas do Treino) ---")
 display(data_loader.data_train[novas_colunas].head())
 #%% DataPreprocessing
 # 1. include the newly engineered features
-num_cols = ['CRS_DEP_TIME', 'CRS_ARR_TIME', 'CRS_ELAPSED_TIME', 'DISTANCE', 'CRS_DEP_HOUR', 'CRS_ARR_HOUR', 'PLANNED_SPEED']
+num_cols = ['CRS_DEP_TIME', 'CRS_ARR_TIME', 'CRS_ELAPSED_TIME', 'DISTANCE', 'CRS_DEP_HOUR', 'CRS_ARR_HOUR', 'PLANNED_SPEED', 'AVG_DELAY_PER_HOUR']
 cat_cols = ['AIRLINE_CODE', 'ORIGIN', 'DEST', 'MONTH', 'DAY_OF_WEEK', 'IS_WEEKEND', 'SEASON', 'IS_HOLIDAY_MONTH', 'TIME_OF_DAY', 'FLIGHT_TYPE', 'ROUTE']
 
 # 2. CHECKPOINT 1: Cleaned Data (Before encoding - for EDA & Hypothesis Testing)
@@ -122,7 +126,7 @@ umap_proj = dr.compute_umap()
 dr.plot_projection(umap_proj, 'UMAP Projection (Non-Linear)')
 features_to_investigate = [
     'DISTANCE', 'AIRLINE_CODE', 'ORIGIN', 'TIME_OF_DAY',
-    'SEASON', 'FLIGHT_TYPE', 'DAY_OF_WEEK', 'MONTH', 'IS_HOLIDAY_MONTH'
+    'SEASON', 'FLIGHT_TYPE', 'DAY_OF_WEEK', 'MONTH', 'IS_HOLIDAY_MONTH','PLANNED_SPEED','ROUTE', 'AVG_DELAY_PER_HOUR','DEST', 'CRS_ELAPSED_TIME'
 ]
 dr.analyze_umap_clusters(umap_proj,features_to_investigate)
 
