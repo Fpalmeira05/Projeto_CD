@@ -21,7 +21,6 @@ class DataLoader:
         # Load data immediately
         self._load_data()
 
-
     def _load_data(self):
         # --- VERIFICAÇÃO 1: O ficheiro existe? ---
         if not os.path.exists(self.filename):
