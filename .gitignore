@@ -3,6 +3,7 @@
 *.csv
 *.xlsx
 *.parquet
+*.pkl
 
 # Ignorar ficheiros temporários do Python e Jupyter Notebooks
 __pycache__/
@@ -13,3 +14,4 @@ __pycache__/
 venv/
 env/
 .env
+.idea/
