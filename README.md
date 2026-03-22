@@ -10,3 +10,6 @@ Projeto desenvolvido no âmbito da unidade curricular de Ciência de Dados (3º 
 * `05_relatorio/`: Relatório do projeto.
 
 *Nota: A pasta de datasets não está incluída no repositório por motivos de tamanho/privacidade.*
+
+##Link para o data set
+https://1drv.ms/x/c/afaa5f457d41ec21/IQDdA8QeaEJjT5KcNzTDdh7fAVbfkk5fYFsZTn_rHRomrTE?e=t1nc2s
