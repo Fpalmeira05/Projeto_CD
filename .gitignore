@@ -1,5 +1,5 @@
 # Ignorar pastas de datasets e ficheiros de dados pesados
-02_datasets/
+
 *.csv
 *.xlsx
 *.parquet
