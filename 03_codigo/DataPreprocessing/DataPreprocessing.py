@@ -77,3 +77,4 @@ class DataPreprocessing:
 
         except ValueError as ve:
             print(f"Error normalizing: {ve}")
+

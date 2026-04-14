@@ -142,8 +142,53 @@ with open('data_loader_cleaned.pkl', 'rb') as f:
 # 2. Run the Tests!
 ht = HypothesisTesting(data_loader_for_testing)
 ht.run_all_tests()
+#%%Categorize
 
+# 1. Definir a função que transforma os minutos em classes (0, 1 e 2)
+def categorizar_atraso(minutos):
+    if minutos <= 15:
+        return 0  # On-time
+    elif minutos <= 30:
+        return 1  # Short delay
+    else:
+        return 2  # Long delay
 
+print("A converter a variável alvo de Regressão (minutos) para Classificação (categorias)...")
+
+# 2. Aplicar a função aos teus labels de Treino e Teste
+# (Assumindo que a tua instância do DataLoader se chama 'data_loader')
+y_train_class = data_loader.labels_train.apply(categorizar_atraso)
+y_test_class = data_loader.labels_test.apply(categorizar_atraso)
+
+# 3. Verificação de Segurança (Sanity Check)
+print("\nConversão concluída com sucesso!")
+print("-" * 40)
+print("Distribuição das Classes no conjunto de TREINO:")
+# O value_counts mostra quantos voos caíram em cada categoria
+distribuicao_treino = y_train_class.value_counts().sort_index()
+distribuicao_treino.index = ['0 (On-time)', '1 (Short Delay)', '2 (Long Delay)']
+print(distribuicao_treino)
+
+print("\nDistribuição das Classes no conjunto de TESTE:")
+distribuicao_teste = y_test_class.value_counts().sort_index()
+distribuicao_teste.index = ['0 (On-time)', '1 (Short Delay)', '2 (Long Delay)']
+print(distribuicao_teste)
+#%%Categorize
+# Importar a nossa nova classe
+from Models.SupervisedModels import SupervisedModels
+
+# Inicializar com o X e os novos Y (categorizados)
+# Atenção: Ajusta o nome do teu 'data_loader' se lhe chamaste outra coisa!
+supervised_pipeline = SupervisedModels(
+    X_train=data_loader.data_train,
+    X_test=data_loader.data_test,
+    y_train=y_train_class,
+    y_test=y_test_class
+)
+
+# Correr a magia toda!
+supervised_pipeline.train_and_evaluate()
+supervised_pipeline.plot_confusion_matrices()
 
 
 
