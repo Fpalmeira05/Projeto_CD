@@ -142,6 +142,156 @@ with open('data_loader_cleaned.pkl', 'rb') as f:
 # 2. Run the Tests!
 ht = HypothesisTesting(data_loader_for_testing)
 ht.run_all_tests()
+#%%Knn
+#using the preprocessed because the data need to be all the same so theres no overpower difference. All the text is in 1s and 0s.
+with open('data_loader_preprocessed.pkl', 'rb') as f:
+    data_loader = pickle.load(f)
+
+# 2. Extract your X (Features) - These are already scaled!
+X_train_scaled = data_loader.data_train.values # .values converts Pandas DataFrame to NumPy Array
+X_test_scaled = data_loader.data_test.values
+
+def categorize_delay(delay):
+    if delay < 15:
+        return 0  # On-time
+    elif 15 <= delay <= 30:
+        return 1  # Short delay
+    else:
+        return 2  # Long delay
+
+# Assuming data_loader is loaded from your checkpoint
+y_train_class = data_loader.labels_train.apply(categorize_delay)
+y_test_class = data_loader.labels_test.apply(categorize_delay)
+
+# Now you can train your custom KNN!
+knn = Knn(k=5)
+knn.fit(X_train_scaled, y_train_class)
+
+# Remember to test on a small sample first! (e.g., 5000 rows)
+accuracy = knn.score(X_test_scaled[:5000], y_test_class[:5000])
+print(f"Custom KNN Accuracy: {accuracy:.4f}")
+#%% Ensemble
+# Bagging (Random Forest) + Boosting (Hist Gradient Boosting) on the multiclass delay target
+with open('data_loader_preprocessed.pkl', 'rb') as f:
+    data_loader_ensemble = pickle.load(f)
+
+exp1 = Ensemble(data_loader_ensemble, train_sample_size=200000, test_sample_size=50000, balance_training=False)
+exp1.run_all()
+exp2 = Ensemble(data_loader_ensemble, train_sample_size=200000, test_sample_size=50000, balance_training=True)
+exp2.run_all()
+
+#%% Deep Learning (MLP via TensorFlow/Keras)
+# MLP for the multiclass delay target — same train/test sizes as Ensemble for a fair comparison.
+with open('data_loader_preprocessed.pkl', 'rb') as f:
+    data_loader_dl = pickle.load(f)
+
+# --- Experiment 1: classification (3 classes) with sklearn class_weight + macro-F1 callback. ---
+# CHAMPION MLP. The custom macro-F1 callback prevents the degenerate-majority
+# collapse that the default EarlyStopping(val_loss) would silently produce.
+print("=" * 60)
+print("DEEP LEARNING — Experiment 1: Classification (sklearn-balanced + macro-F1 callback)")
+print("=" * 60)
+dl_clf = DeepLearning(
+    data_loader_dl,
+    task='classification',
+    train_sample_size=200000,
+    test_sample_size=50000,
+    balance_training=False,
+)
+dl_clf.run_all(hidden_units=(128, 64, 32), dropout_rate=0.3,
+               learning_rate=1e-3, epochs=80, batch_size=512, patience=10)
+
+# --- Experiment 1b: stress-test of "more fixes is better". ---
+# Drops BatchNorm, uses stronger manual weights, and adds log-prior bias init.
+# Empirically this OVER-CORRECTS and the model re-collapses to majority,
+# documenting that the macro-F1 callback alone (Exp 1) was the necessary AND
+# sufficient intervention.
+print("=" * 60)
+print("DEEP LEARNING — Experiment 1b: Over-correction stress-test")
+print("=" * 60)
+dl_clf_fix = DeepLearning(
+    data_loader_dl,
+    task='classification',
+    train_sample_size=200000,
+    test_sample_size=50000,
+    balance_training=False,
+)
+dl_clf_fix.run_all(
+    hidden_units=(128, 64, 32),
+    dropout_rate=0.3,
+    learning_rate=1e-3,
+    epochs=80,
+    batch_size=512,
+    patience=10,
+    use_batch_norm=False,
+    class_weight_override={0: 1.0, 1: 5.0, 2: 2.5},
+)
+
+# --- Experiment 2: classification on a balanced (undersampled) training set ---
+print("=" * 60)
+print("DEEP LEARNING — Experiment 2: Classification (balanced training)")
+print("=" * 60)
+dl_clf_bal = DeepLearning(
+    data_loader_dl,
+    task='classification',
+    train_sample_size=200000,
+    test_sample_size=50000,
+    balance_training=True,
+)
+dl_clf_bal.run_all(hidden_units=(128, 64, 32), dropout_rate=0.3,
+                   learning_rate=1e-3, epochs=80, batch_size=512, patience=10)
+
+# --- Experiment 3: regression (predict ARR_DELAY in minutes) ---
+print("=" * 60)
+print("DEEP LEARNING — Experiment 3: Regression on ARR_DELAY")
+print("=" * 60)
+dl_reg = DeepLearning(
+    data_loader_dl,
+    task='regression',
+    train_sample_size=200000,
+    test_sample_size=50000,
+)
+dl_reg.run_all(hidden_units=(128, 64, 32), dropout_rate=0.3,
+               learning_rate=1e-3, epochs=80, batch_size=512, patience=10)
+
+#%% Hierarchical Deep Learning (Classify then Regress)
+# Two-stage cascade: Stage 1 = binary classifier (On-time vs Delayed),
+# Stage 2 = regression on minute-level delay, trained ONLY on delayed flights.
+# Rationale: Flat 3-class MLP and flat regression both struggle because the
+# pre-departure features have moderate signal for "is it late?" and very weak
+# signal for "by how much?". Separating the two questions lets each stage
+# specialize.
+from DeepLearning.HierarchicalDeepLearning import HierarchicalDeepLearning
+
+with open('data_loader_preprocessed.pkl', 'rb') as f:
+    data_loader_hdl = pickle.load(f)
+
+print("=" * 60)
+print("HIERARCHICAL DL — Stage 1 (binary) + Stage 2 (regression)")
+print("=" * 60)
+hdl = HierarchicalDeepLearning(
+    data_loader_hdl,
+    train_sample_size=200000,
+    test_sample_size=50000,
+    delay_threshold=15,
+)
+hdl.run_all(
+    hidden_units=(128, 64, 32),
+    dropout_rate=0.3,
+    learning_rate=1e-3,
+    epochs=80,
+    batch_size=512,
+    patience=10,
+    threshold=0.5,
+)
+
+#%% Clustering — airport operational profiles
+# Aggregates flights to one row per ORIGIN airport, then applies three
+# clustering algorithms (K-Means, DBSCAN, Agglomerative) over varying
+# n_clusters / eps to identify operational patterns.
+# Uses the CLEANED data (before one-hot) so ORIGIN / DEST / AIRLINE_CODE
+# are still raw strings the aggregator can group on.
+from Clustering.Clustering import Clustering
 #%%Categorize
 
 # 1. Definir a função que transforma os minutos em classes (0, 1 e 2)
@@ -153,6 +303,23 @@ def categorizar_atraso(minutos):
     else:
         return 2  # Long delay
 
+with open('data_loader_cleaned.pkl', 'rb') as f:
+    data_loader_cluster = pickle.load(f)
+
+print("=" * 60)
+print("CLUSTERING — Airports by operational profile")
+print("=" * 60)
+clust = Clustering(
+    data_loader_cluster,
+    entity='airport',
+    sample_size=300000,
+    min_flights=30,
+)
+clust.run_all(
+    k_values=range(2, 9),
+    eps_values=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0],
+    agglo_k=4,
+)
 print("A converter a variável alvo de Regressão (minutos) para Classificação (categorias)...")
 
 # 2. Aplicar a função aos teus labels de Treino e Teste
