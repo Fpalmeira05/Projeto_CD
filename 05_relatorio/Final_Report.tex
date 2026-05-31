@@ -1,0 +1,1779 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{caption}
+\usepackage{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  frame=single,
+  language=Python,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray},
+  showstringspaces=false
+}
+
+\graphicspath{{./}}
+
+\begin{document}
+
+\title{Previsão de Atrasos em Voos Comerciais:\\Relatório Global do Projeto — Fases 1 a 6}
+
+\author{
+\IEEEauthorblockN{Francisco Palmeira 2109923}
+\IEEEauthorblockA{\textit{Universidade da Madeira}\\
+\textit{Engenharia Informática}\\
+Funchal, Portugal\\
+2109923@student.uma.pt}
+\and
+\IEEEauthorblockN{Omar Jesus 2099223}
+\IEEEauthorblockA{\textit{Universidade da Madeira}\\
+\textit{Engenharia Informática}\\
+Funchal, Portugal\\
+2099223@student.uma.pt}
+}
+
+\maketitle
+
+% ===============================================================
+\begin{abstract}
+Este relatório documenta o ciclo de vida completo de análise de dados —
+Fases 1 a 6 — aplicado ao \textit{Flight Delay and Cancellation Dataset
+(2019–2023)} do Departamento de Transportes dos EUA. O problema é
+reformulado como classificação triclasse — \textit{On-time} ($<$15 min),
+\textit{Short delay} (15–30 min) e \textit{Long delay} ($>$30 min) — e como
+regressão sobre os minutos de atraso à chegada. As Fases 1–3 estabelecem
+uma \textit{pipeline} de preparação que elimina rigorosamente o \textit{data
+leakage} pós-partida, cria \textbf{doze novas features} (temporais,
+geográficas e \textit{target encoding}), e valida o sinal preditivo por análise
+exploratória (PCA, t-SNE, UMAP, importância por permutação) e testes de
+hipóteses (Welch e Kruskal-Wallis, $p<0{,}0001$). As Fases 4–6 constroem seis
+famílias de modelos: KNN implementado de raiz em NumPy, modelos supervisionados
+clássicos (Árvore de Decisão e Regressão Logística), dois \textit{ensembles}
+(Random Forest e HistGradientBoosting), quatro variantes MLP em
+TensorFlow/Keras, e agrupamento de aeroportos com K-Means, DBSCAN e
+Agglomerative Ward. Diagnostica-se um \textit{bug} estrutural na interação
+\texttt{class\_weight} $\times$ \texttt{EarlyStopping(val\_loss)} do Keras,
+corrigido com um \textit{callback} personalizado (\texttt{MacroF1Monitor}) que
+eleva o Macro F1 de 0,28 para 0,42. Um modelo hierárquico de três estágios
+reduz o MAE de ponta a ponta para 26,09 min e o RMSE do subconjunto
+\textit{Short delay} para apenas 6,03 min. Demonstra-se que a previsão ao
+minuto com \textit{features} pré-partida é fundamentalmente limitada, com
+$R^2<0$ em todos os cenários, o que motiva a formulação como classificação e,
+em particular, a questão binária \textit{«vai atrasar?»} como produto
+operacional.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Ciência de Dados, Feature Engineering, Testes de Hipóteses, Classificação
+Multiclasse, KNN, Árvore de Decisão, Regressão Logística, Random Forest,
+Gradient Boosting, MLP, Deep Learning, Clustering, K-Means, DBSCAN,
+Agglomerative Ward, Modelo Hierárquico.
+\end{IEEEkeywords}
+
+% ===============================================================
+\section{Introdução}
+
+\subsection{Contextualização do Problema}
+A pontualidade é um dos indicadores de desempenho mais críticos da aviação
+comercial. Os atrasos geram custos operacionais elevados — combustível
+desperdiçado, tripulações imobilizadas, portões bloqueados e indemnizações —
+e degradam a satisfação dos passageiros. Este projeto utiliza dados reais do
+Departamento de Transportes dos EUA~\cite{dataset} para abordar o problema
+através da previsão proativa de atrasos a partir de fatores operacionais e
+temporais conhecidos \emph{antes} da partida.
+
+\subsection{Objetivos da Análise}
+O objetivo central é classificar o estado de chegada de um voo em três
+categorias: \textit{On-time} (atraso $<$15 min), \textit{Short delay} (15–30
+min) e \textit{Long delay} ($>$30 min). Em paralelo, formula-se a tarefa de
+regressão sobre os minutos exatos de atraso à chegada (\texttt{ARR\_DELAY}),
+permitindo avaliar até que ponto o problema é resolúvel ao minuto. Esta dupla
+formulação alinha-se diretamente com as decisões operacionais das companhias
+aéreas: a decisão binária/triclasse orienta a alocação de recursos, e a
+estimativa em minutos quantifica a severidade esperada.
+
+\subsection{Conjunto de Dados}
+O conjunto original contém mais de \textbf{3 milhões} de registos de voos
+domésticos comerciais dos EUA entre 2019 e 2023. Após a preparação descrita
+na Secção~\ref{sec:fase1}, o conjunto de treino final contém \textbf{200.000
+voos} e o de teste \textbf{50.000 voos}. As \textit{features} utilizadas nos
+modelos são exclusivamente pré-partida: \texttt{CRS\_DEP\_TIME},
+\texttt{CRS\_ARR\_TIME}, \texttt{CRS\_ELAPSED\_TIME}, \texttt{DISTANCE},
+\texttt{AIRLINE\_CODE}, \texttt{ORIGIN}, \texttt{DEST} e as \textbf{doze}
+\textit{features} derivadas detalhadas na Secção~\ref{sec:fase1}
+(Tabela~\ref{tab:features}).
+
+% ===============================================================
+\section{Fase 1: Preparação dos Dados}
+\label{sec:fase1}
+
+A preparação dos dados foi implementada como uma \textit{pipeline} modular,
+com uma classe Python dedicada a cada etapa (\texttt{DataLoader},
+\texttt{DataCleaning}, \texttt{FeatureEngineering}, \texttt{DataPreprocessing}),
+orquestradas por um \textit{script} principal com \textit{checkpoints} em
+disco (\texttt{pickle}) entre fases para permitir reprodutibilidade e evitar
+recomputações dispendiosas. Esta secção documenta exaustivamente cada decisão
+tomada e o seu fundamento.
+
+\subsection{Carregamento, Balanceamento e Divisão (\texttt{DataLoader})}
+O ponto de partida é o ficheiro \texttt{flights\_sample\_3m.csv}, uma amostra de
+$\approx$3 milhões de registos de voos domésticos comerciais dos EUA
+(2019–2023). Cada registo descreve um voo agendado e o seu desfecho, incluindo
+identificadores (companhia, aeroportos de origem e destino), horários
+planeados, distância, tempos reais e a decomposição do atraso por causa. Logo no
+carregamento são tomadas quatro decisões estruturais:
+\begin{enumerate}
+\item \textbf{Exclusão de voos cancelados e divergidos}
+      (\texttt{CANCELLED == 0} e \texttt{DIVERTED == 0}), por não possuírem
+      atraso à chegada quantificável.
+\item \textbf{Truncamento de atrasos negativos a zero}
+      (\texttt{ARR\_DELAY.clip(lower=0)}): prever chegadas antecipadas não
+      acrescenta valor operacional, pelo que voos adiantados são tratados como
+      pontuais.
+\item \textbf{Balanceamento por \textit{undersampling}}: a classe maioritária de
+      voos \emph{pontuais} (\texttt{ARR\_DELAY == 0}) é subamostrada
+      aleatoriamente (\texttt{random\_state=42}) até igualar o número de voos
+      \emph{atrasados} (\texttt{ARR\_DELAY > 0}), produzindo um conjunto
+      equilibrado a \textbf{50\%/50\%} entre pontuais e atrasados, depois
+      baralhado.
+\item \textbf{Divisão treino/teste} com \texttt{train\_test\_split}
+      (\texttt{test\_size=0.2}, \texttt{random\_state=42}), realizada \emph{antes}
+      das fases seguintes para garantir que nenhuma estatística do teste
+      contamina o treino.
+\end{enumerate}
+É importante notar que este balanceamento 50/50 opera sobre a partição
+\emph{binária} (pontual vs.\ atrasado), \emph{não} sobre as três classes finais.
+Como a classe \textit{On-time} ($<$15 min) absorve ainda os voos com atraso
+entre 1 e 14 minutos, a distribuição \emph{triclasse} resultante permanece
+desequilibrada em $\approx$\textbf{73\% On-time / 10\% Short / 17\% Long} — facto
+determinante para toda a fase de modelação. Para a modelação, usam-se
+subconjuntos de \textbf{200.000 voos de treino} e \textbf{50.000 de teste}.
+
+\subsection{Prevenção de \textit{Data Leakage}}
+Assegurar a ausência de \textit{data leakage} foi a prioridade crítica do
+projeto: qualquer variável conhecida apenas \emph{após} a descolagem, ou
+derivada da variável alvo, inflaciona artificialmente o desempenho e invalida o
+modelo em produção. Removeram-se, por isso, \textbf{17 colunas}, organizadas em
+quatro grupos de risco distintos (Tabela~\ref{tab:leakage}). A regra de ouro
+adotada foi inequívoca: o modelo só pode aceder a informação disponível no
+\emph{momento do planeamento} do voo.
+
+\begin{table}[h]
+\centering
+\caption{Colunas removidas por risco de \textit{data leakage}}
+\label{tab:leakage}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.05cm}p{3.5cm}p{1.6cm}}
+\toprule
+\textbf{Grupo} & \textbf{Colunas} & \textbf{Razão} \\
+\midrule
+Eventos pós-partida & \texttt{DEP\_TIME}, \texttt{DEP\_DELAY},
+\texttt{TAXI\_OUT}, \texttt{WHEELS\_OFF}, \texttt{WHEELS\_ON},
+\texttt{TAXI\_IN}, \texttt{ARR\_TIME} & Só conhecidos depois de o voo partir \\
+\midrule
+Resultados reais do voo & \texttt{ACTUAL\_ELAPSED\_TIME}, \texttt{AIR\_TIME} &
+Medidos durante/após o voo \\
+\midrule
+Estado terminal & \texttt{CANCELLED}, \texttt{CANCELLATION\_CODE},
+\texttt{DIVERTED} & Desfecho operacional \\
+\midrule
+Decomposição do alvo & \texttt{DELAY\_DUE\_CARRIER}, \texttt{\_WEATHER},
+\texttt{\_NAS}, \texttt{\_SECURITY}, \texttt{\_LATE\_AIRCRAFT} & Derivadas
+diretamente de \texttt{ARR\_DELAY} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Limpeza de Dados (\texttt{DataCleaning})}
+Já após a divisão treino/teste, a classe \texttt{DataCleaning} aplica uma
+sequência determinística de quatro operações. Crucialmente, as transformações
+que poderiam introduzir \textit{leakage} são restritas ao conjunto de
+\textbf{treino}:
+
+\begin{enumerate}
+\item \textbf{Remoção das colunas de \textit{leakage}} (Tabela~\ref{tab:leakage}),
+      aplicada a treino e teste.
+\item \textbf{Remoção de registos duplicados}, apenas no \textbf{treino},
+      eliminando voos repetidos que enviesariam as frequências e o ajuste do
+      modelo (o teste é preservado intacto para refletir a realidade).
+\item \textbf{Tratamento de valores ausentes} por \textbf{eliminação} das linhas
+      com qualquer valor em falta (\texttt{dropna}), em treino e teste, com
+      realinhamento dos rótulos. Optou-se pela remoção, em vez da imputação,
+      por o volume de dados ser amplo o suficiente para a tolerar sem perda de
+      representatividade, evitando introduzir valores sintéticos.
+\item \textbf{Remoção de \textit{outliers} pelo método do \textit{Z-score}},
+      apenas no \textbf{treino}: descartam-se as linhas em que \emph{qualquer}
+      \textit{feature} numérica excede um desvio de $|z| > 2$ face à média da
+      respetiva coluna. Note-se que este filtro incide sobre as
+      \emph{features} (horários, distância, tempos planeados) e \textbf{não}
+      sobre a variável alvo \texttt{ARR\_DELAY} — a cauda direita de atrasos
+      extremos, sinal operacional genuíno, é assim preservada. O único
+      tratamento do alvo (truncamento de negativos a zero) já ocorrera no
+      carregamento.
+\end{enumerate}
+
+\noindent A conversão de \texttt{FL\_DATE} para \texttt{datetime}, necessária à
+extração das \textit{features} temporais, é assegurada na fase seguinte. Em
+síntese, o desequilíbrio \emph{triclasse} (73/10/17) que sobrevive ao
+balanceamento binário não é eliminado por nova reamostragem global nesta fase;
+é endereçado, de forma controlada, ao nível de cada modelo — via
+\texttt{class\_weight} e, em experiências dedicadas, \textit{undersampling}
+adicional da classe maioritária (cf.\ Fases 4–5).
+
+\subsection{Engenharia de \textit{Features}}
+Para enriquecer a capacidade preditiva e capturar os padrões contextuais que a
+análise viria a confirmar como dominantes, construíram-se \textbf{doze novas
+\textit{features}} a partir dos atributos brutos. A Tabela~\ref{tab:features}
+documenta cada uma com a sua definição exata (tal como implementada no código)
+e a respetiva codificação, agrupadas em três famílias: temporais, geográficas/
+operacionais e \textit{target encoding}.
+
+\begin{table*}[t]
+\centering
+\caption{Features derivadas — definição exata e codificação (\texttt{FeatureEngineering} / \texttt{DataPreprocessing})}
+\label{tab:features}
+\begin{tabular}{p{2.6cm}p{2.0cm}p{6.0cm}p{4.5cm}}
+\toprule
+\textbf{Feature} & \textbf{Família} & \textbf{Definição} & \textbf{Valores / Codificação} \\
+\midrule
+\texttt{MONTH}            & Temporal & Mês extraído de \texttt{FL\_DATE} & Inteiro $1$–$12$ \\
+\texttt{DAY\_OF\_WEEK}    & Temporal & Dia da semana de \texttt{FL\_DATE} & $0$=Segunda $\dots$ $6$=Domingo \\
+\texttt{IS\_WEEKEND}      & Temporal (binária) & $1$ se \texttt{DAY\_OF\_WEEK}~$\geq 5$ & $\{0,1\}$ \\
+\texttt{SEASON}           & Temporal & Estação derivada do mês & $1$=Inverno (12,1,2), $2$=Primavera (3–5), $3$=Verão (6–8), $4$=Outono (9–11) \\
+\texttt{IS\_HOLIDAY\_MONTH} & Temporal (binária) & $1$ se mês $\in \{7,8,12\}$ (julho, agosto, dezembro) & $\{0,1\}$ \\
+\texttt{CRS\_DEP\_HOUR}   & Temporal & \texttt{CRS\_DEP\_TIME}~$//~100$ (hora planeada de partida) & Inteiro $0$–$23$ \\
+\texttt{CRS\_ARR\_HOUR}   & Temporal & \texttt{CRS\_ARR\_TIME}~$//~100$ (hora planeada de chegada) & Inteiro $0$–$23$ \\
+\texttt{TIME\_OF\_DAY}    & Temporal & Período do dia (\texttt{pd.cut} sobre \texttt{CRS\_DEP\_HOUR}) & $0$=Madrugada (0–5h), $1$=Manhã (6–11h), $2$=Tarde (12–18h), $3$=Noite (19–23h) \\
+\texttt{ROUTE}            & Geográfica & Concatenação \texttt{ORIGIN}\,+\,``\_''\,+\,\texttt{DEST} & Categórica $\rightarrow$ \textit{Label Encoding} \\
+\texttt{FLIGHT\_TYPE}     & Operacional & Faixa de distância do voo (\texttt{pd.cut} sobre \texttt{DISTANCE}) & $0$=Curto ($\leq$500 mi), $1$=Médio (501–1500), $2$=Longo ($>$1500) \\
+\texttt{PLANNED\_SPEED}   & Operacional & Velocidade planeada ($\approx$\texttt{DISTANCE}/\texttt{CRS\_ELAPSED\_TIME}) & Contínua $\rightarrow$ \textit{StandardScaler} \\
+\texttt{AVG\_DELAY\_PER\_HOUR} & \textit{Target encoding} & Média de \texttt{ARR\_DELAY} por \texttt{CRS\_DEP\_HOUR}, ajustada \emph{só no treino} & Contínua $\rightarrow$ \textit{StandardScaler} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+A justificação destas escolhas é central para o projeto. As \textit{features}
+temporais codificam a hipótese de que \emph{quando} um voo ocorre (estação,
+hora, fim de semana, época de férias) condiciona fortemente o atraso esperado.
+A \texttt{ROUTE} e o \texttt{FLIGHT\_TYPE} capturam a dimensão
+geográfico-operacional. Já a \texttt{AVG\_DELAY\_PER\_HOUR}, obtida por
+\textit{target encoding}, é a tentativa mais direta de injetar sinal histórico:
+codifica, para cada hora de partida, o atraso médio observado. \textbf{A sua
+construção exige cuidado anti-\textit{leakage}}: o mapeamento hora~$\rightarrow$
+atraso médio é calculado \emph{exclusivamente} no conjunto de treino
+(\texttt{groupby('CRS\_DEP\_HOUR')} sobre \texttt{ARR\_DELAY} do treino) e só
+depois aplicado ao teste; horas eventualmente ausentes no teste são preenchidas
+com a média global do treino. Por esta dependência do alvo, esta variável é
+criada já dentro da fase de pré-processamento, \emph{após} a divisão
+treino/teste — e nunca antes.
+
+\subsection{Definição da Variável Alvo}
+O atraso contínuo \texttt{ARR\_DELAY} (em minutos) é discretizado em três
+classes operacionalmente significativas, mantendo-se simultaneamente disponível
+para a tarefa de regressão:
+\begin{equation}
+\texttt{DELAY\_CLASS} =
+\begin{cases}
+0 \;(\textit{On-time}) & \text{se } \texttt{ARR\_DELAY} < 15 \\
+1 \;(\textit{Short})   & \text{se } 15 \leq \texttt{ARR\_DELAY} \leq 30 \\
+2 \;(\textit{Long})    & \text{se } \texttt{ARR\_DELAY} > 30
+\end{cases}
+\end{equation}
+Os limiares de 15 e 30 minutos derivam da prática operacional da aviação (o
+\textit{threshold} de 15 min é o padrão do DOT para considerar um voo
+``atrasado''). Esta dupla formulação — classificação e regressão sobre o mesmo
+alvo — permite, mais tarde, contrastar a previsibilidade da \emph{categoria}
+com a do \emph{valor exato}.
+
+\subsection{Disciplina Anti-\textit{Leakage} no \textit{Target Encoding}}
+A divisão treino/teste ocorre cedo (no \texttt{DataLoader}:
+\texttt{test\_size=0.2}, \texttt{random\_state=42}), \emph{antes} de qualquer
+engenharia de \textit{features}. É esta ordem que torna o \textit{target
+encoding} seguro: a função de engenharia é invocada com o alvo \emph{apenas}
+para o treino — calculando o mapa hora~$\rightarrow$~atraso médio
+(\texttt{groupby('CRS\_DEP\_HOUR')}) e retendo-o em memória — e, para o teste, é
+invocada \emph{sem} o alvo, limitando-se a aplicar o mapa já aprendido. Horas do
+teste ausentes no treino recebem a média global do treino. Assim, nenhuma
+informação de atraso do conjunto de teste participa na construção de qualquer
+\textit{feature}.
+
+\subsection{Codificação e Escalonamento}
+A transformação final dos dados distinguiu três tratamentos conforme a natureza
+de cada variável:
+\begin{itemize}
+\item \textbf{\textit{Label Encoding}} para as variáveis categóricas em texto
+      (\texttt{ORIGIN}, \texttt{DEST}, \texttt{AIRLINE\_CODE}, \texttt{ROUTE}).
+      Para garantir que nenhum código de aeroporto ou rota presente apenas no
+      teste provoca uma falha em inferência, cada codificador é ajustado sobre a
+      \emph{união} dos valores de treino e teste — uma partilha de vocabulário
+      categórico que não envolve a variável alvo e, portanto, não constitui
+      \textit{leakage} de informação preditiva.
+\item \textbf{\textit{StandardScaler}} (média 0, desvio-padrão 1) para as
+      variáveis contínuas: \texttt{CRS\_DEP\_TIME}, \texttt{CRS\_ARR\_TIME},
+      \texttt{CRS\_ELAPSED\_TIME}, \texttt{DISTANCE}, \texttt{CRS\_DEP\_HOUR},
+      \texttt{CRS\_ARR\_HOUR}, \texttt{PLANNED\_SPEED} e
+      \texttt{AVG\_DELAY\_PER\_HOUR}.
+\item \textbf{\textit{MinMaxScaler}} (intervalo $[0,1]$) para as restantes
+      variáveis (categóricas já codificadas numericamente).
+\end{itemize}
+A separação entre dois escalonadores é uma decisão técnica deliberada: a
+estandardização é apropriada para grandezas contínuas com distribuições
+aproximadamente simétricas após transformação, enquanto a normalização
+\textit{min-max} mantém os códigos categóricos num intervalo limitado e
+comparável. Os escalonadores (\textit{StandardScaler} e \textit{MinMaxScaler})
+são \textbf{ajustados apenas no treino} e aplicados ao teste, e a sua
+serialização permite a posterior operacionalização (Fase 6). Este cuidado de
+escala é particularmente importante para o
+KNN, cujas distâncias Euclidianas seriam dominadas por qualquer dimensão de
+escala desproporcionada.
+
+% ===============================================================
+\section{Fase 2: Análise Exploratória de Dados}
+
+A análise exploratória teve um objetivo metodológico preciso: determinar
+\emph{a priori} que tipo de modelo o problema exige. Em concreto, procurou-se
+responder a uma pergunta — \textit{existe estrutura linear que ligue as
+\textit{features} ao atraso, ou o problema é intrinsecamente não-linear?} A
+resposta condiciona toda a Fase 4. Para tal recorreu-se a quatro instrumentos
+complementares: análise de distribuições, correlação linear (Pearson),
+importância não-linear por permutação, e redução de dimensionalidade (PCA,
+t-SNE e UMAP).
+
+\subsection{Distribuições e Relações Bivariadas}
+A primeira etapa mapeou a dispersão das variáveis e a sua interação com o
+atraso. As variáveis contínuas — como o tempo de voo planeado
+(\texttt{CRS\_ELAPSED\_TIME}) e a distância (\texttt{DISTANCE}) — apresentam
+distribuições fortemente assimétricas à direita e ampla gama de valores
+(Fig.~\ref{fig:dist}). Esta observação tem dupla consequência: justifica a
+estandardização aplicada na Fase 1 e, sobretudo, \textbf{condiciona a escolha
+dos testes estatísticos} da Fase 3 — uma distribuição alvo enviesada viola a
+premissa de normalidade e exige testes não-paramétricos. A análise dos atrasos
+por categoria, através de \textit{boxplots} (Fig.~\ref{fig:boxplot}), mostrou
+que a cauda de atrasos extremos se alarga significativamente em categorias
+específicas — meses de férias e voos noturnos — antecipando visualmente o
+sinal que os testes de hipóteses viriam a confirmar matematicamente.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{plots.png}
+    \caption{Distribuições das \textit{features} numéricas e categóricas. As
+    variáveis contínuas exibem forte assimetria à direita, justificando a
+    estandardização e a escolha de testes não-paramétricos.}
+    \label{fig:dist}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{boxplot.png}
+    \caption{\textit{Boxplots} das \textit{features} selecionadas. A amplitude
+    das caudas confirma a presença de atrasos extremos concentrados em
+    categorias operacionais e temporais específicas.}
+    \label{fig:boxplot}
+\end{figure}
+
+\subsection{Análise de Correlação Linear (Heatmap)}
+Para quantificar a força das relações lineares diretas entre as variáveis
+numéricas e o atraso à chegada (\texttt{ARR\_DELAY}), construiu-se uma matriz de
+correlação de Pearson (Fig.~\ref{fig:heatmap}). A leitura da última linha/coluna
+— a correlação de cada \textit{feature} com o alvo — é reveladora: todos os
+coeficientes são \textbf{quase nulos}. A distância e a velocidade planeada
+exibem $r \approx 0{,}01$, os horários e tempos planeados $r \leq 0{,}08$, e
+mesmo a melhor variável, a \texttt{AVG\_DELAY\_PER\_HOUR} obtida por
+\textit{target encoding}, atinge apenas $r \approx 0{,}09$. Em contraste, o
+\textit{heatmap} revela correlações elevadas \emph{entre} \textit{features}
+(e.g.\ \texttt{CRS\_DEP\_TIME} vs \texttt{CRS\_DEP\_HOUR} $\approx 1{,}00$;
+\texttt{DISTANCE} vs \texttt{CRS\_ELAPSED\_TIME} $\approx 0{,}97$), confirmando
+redundância esperada entre pares derivados da mesma grandeza.
+
+Esta é a \textbf{primeira prova matemática} de que não existe relação linear
+simples que explique os atrasos: o atraso não cresce proporcionalmente com a
+distância nem com a hora exata de partida de forma isolada, resultando antes de
+uma combinação complexa e contextual de fatores. A consequência metodológica é
+direta — modelos lineares (e.g.\ regressão linear simples) estão votados ao
+fracasso, o que motiva o recurso a algoritmos não-lineares e baseados em
+árvores.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{heatmap.png}
+    \caption{Matriz de correlação de Pearson entre as variáveis numéricas e
+    \texttt{ARR\_DELAY}. Os coeficientes residuais com a variável alvo provam
+    a ausência de relação linear direta.}
+    \label{fig:heatmap}
+\end{figure}
+
+\subsection{Importância das Variáveis (Permutation Importance)}
+Como a correlação linear se revelou insuficiente, recorreu-se a um método
+não-linear robusto: a importância por permutação. Treinou-se um
+\textit{Random Forest Regressor} base e mediu-se, para cada coluna, o aumento do
+erro do modelo provocado pela aleatorização (\textit{shuffling}) dos seus
+valores — uma \textit{feature} é tanto mais importante quanto mais o seu
+embaralhamento degrada a previsão (Fig.~\ref{fig:fimp}).
+
+O resultado mais informativo emerge do \textbf{contraste com a correlação de
+Pearson}. As variáveis contínuas de horário e rota — \texttt{CRS\_ARR\_TIME},
+\texttt{CRS\_DEP\_TIME}, \texttt{DISTANCE} e \texttt{PLANNED\_SPEED} — lideram a
+importância por permutação, apesar de exibirem correlação linear quase nula com
+o alvo. Esta aparente contradição é, na verdade, a \textbf{prova mais forte da
+natureza não-linear} do problema: estas variáveis carregam sinal preditivo
+genuíno, mas só acessível através das interações e fronteiras não-lineares que a
+\textit{Random Forest} consegue modelar e que um simples coeficiente linear é
+incapaz de detetar. As \textit{features} temporais categóricas
+(\texttt{TIME\_OF\_DAY}, \texttt{FLIGHT\_TYPE}), embora com importância marginal
+mais baixa neste teste \emph{univariado} de permutação, revelar-se-ão
+determinantes para a \emph{estrutura global} dos dados na análise de redução de
+dimensionalidade que se segue. Em conjunto, os dois resultados confirmam que
+nenhuma \textit{feature} isolada explica o atraso de forma linear, justificando
+definitivamente o recurso a modelos não-lineares.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{ramdomforest.png}
+    \caption{Importância por permutação (\textit{Random Forest Regressor}
+    base). As \textit{features} contextuais engenheiradas superam as variáveis
+    operacionais brutas, validando a fase de \textit{Feature Engineering}.}
+    \label{fig:fimp}
+\end{figure}
+
+\subsection{Redução de Dimensionalidade: Linear vs.\ Não-Linear}
+Para investigar a estrutura global dos dados aplicaram-se três técnicas
+complementares — um método linear (PCA) e dois não-lineares (t-SNE e UMAP) —
+todas sobre as \textit{features} estandardizadas. A Tabela~\ref{tab:dimred}
+resume a configuração exata de cada algoritmo. A lógica experimental é uma
+prova por contraste: se um método linear falha mas um não-linear sucede, a
+não-linearidade do problema fica demonstrada.
+
+\begin{table}[h]
+\centering
+\caption{Hiperparâmetros das técnicas de redução de dimensionalidade}
+\label{tab:dimred}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{1.0cm}p{4.2cm}p{2.0cm}}
+\toprule
+\textbf{Algoritmo} & \textbf{Parâmetros} & \textbf{Amostra} \\
+\midrule
+PCA   & \texttt{n\_components=2} & Conjunto completo \\
+t-SNE & \texttt{perplexity=30}, \texttt{random\_state=42} & 5.000 ($O(N^2)$) \\
+UMAP  & \texttt{n\_neighbors=15}, \texttt{min\_dist=0.1}, \texttt{random\_state=42} & Conjunto completo \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A projeção 2D do \textbf{PCA} (Fig.~\ref{fig:pca}) — que procura as combinações
+lineares de máxima variância — revelou-se incapaz de separar as classes
+\textit{On-time} e \textit{Delayed}, produzindo uma nuvem densa e totalmente
+sobreposta (com um padrão reticulado induzido pelas \textit{features}
+discretas). As duas primeiras componentes capturam uma fração modesta da
+variância total, e nenhuma direção linear isola os voos atrasados. Este
+resultado confirma matematicamente que a estrutura do problema não é
+linearmente separável.
+
+O \textbf{t-SNE} (Fig.~\ref{fig:tsne}), aplicado a uma sub-amostra controlada
+de 5.000 pontos devido à sua complexidade $O(N^2)$, começou a revelar
+agrupamentos fragmentados com base nas \textit{features} operacionais.
+Preserva bem a estrutura local (pontos vizinhos no espaço original mantêm-se
+vizinhos) mas, por construção, sacrifica a noção das distâncias globais entre
+\textit{clusters}, pelo que serve de indício, não de prova.
+
+O \textbf{UMAP} (Fig.~\ref{fig:umap}) produziu agrupamentos distintos e bem
+separados. Colorindo as projeções pela paleta \textit{viridis}
+(Fig.~\ref{fig:umaps14}), foi possível atribuir cada eixo de variação a uma
+\textit{feature} concreta:
+\begin{itemize}
+\item \textbf{Espaço entre \textit{clusters}:} dominado por
+      \texttt{FLIGHT\_TYPE} — voos de curto, médio e longo curso formam
+      ``ilhas'' isoladas, correspondentes a perfis operacionais distintos.
+\item \textbf{Subdivisão dos \textit{clusters}:} \texttt{IS\_HOLIDAY\_MONTH}
+      separa cada grupo em sub-\textit{clusters} de férias vs.\ não-férias.
+\item \textbf{Gradiente interno:} \texttt{TIME\_OF\_DAY} organiza os pontos
+      dentro de cada ilha (manhã, tarde, noite).
+\end{itemize}
+O contraste entre a falha do PCA e o sucesso do UMAP indica que o conjunto de
+dados é \textbf{altamente estruturado, mas estritamente não-linear}. Importa
+notar que a separação observada no UMAP é, em parte, induzida pelas próprias
+\textit{features} categóricas engenheiradas; o seu valor está em demonstrar que
+essas \textit{features} carregam estrutura coerente, justificando o uso de
+modelos não-lineares e baseados em árvores nas fases seguintes — e
+antecipando o desfecho central do projeto: nenhuma destas estruturas
+pré-partida chega para prever o atraso \emph{ao minuto}.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{pca.png}
+    \caption{Projeção PCA (linear). A sobreposição completa das classes
+    \textit{On-time} e \textit{Delayed} prova a inadequação de modelos
+    lineares.}
+    \label{fig:pca}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{tsme.png}
+    \caption{Projeção t-SNE (não-linear) sobre sub-amostra. Surgem
+    agrupamentos locais fragmentados; a estrutura global não é preservada.}
+    \label{fig:tsne}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{umap.png}
+    \caption{Projeção UMAP (não-linear). Agrupamentos distintos e separados,
+    estruturados pelas \textit{features} operacionais e temporais.}
+    \label{fig:umap}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{diverseumaps.png}
+    \caption{UMAP colorido por 14 \textit{features} distintas (paleta
+    \textit{viridis}). Cada \textit{feature} explica um eixo de variação:
+    \texttt{FLIGHT\_TYPE} separa ilhas, \texttt{IS\_HOLIDAY\_MONTH} subdivide,
+    \texttt{TIME\_OF\_DAY} cria gradientes internos.}
+    \label{fig:umaps14}
+\end{figure}
+
+% ===============================================================
+\section{Fase 3: Testes de Hipóteses e Seleção de Modelos}
+
+\subsection{Formulação e Metodologia}
+Onde a EDA sugeriu visualmente, os testes de hipóteses provam formalmente. O
+objetivo foi validar, com rigor estatístico, que cada \textit{feature}
+engenheirada tem relação significativa com o atraso — confirmando que não são
+ruído antes de as confiar a um modelo. Para cada variável formulou-se o par de
+hipóteses padrão, com nível de significância $\alpha = 0{,}05$:
+\begin{itemize}
+\item $H_0$: a distribuição de \texttt{ARR\_DELAY} é igual entre os grupos
+      definidos pela \textit{feature};
+\item $H_1$: pelo menos um grupo difere.
+\end{itemize}
+
+A escolha dos testes foi cuidadosamente adaptada à natureza empírica dos dados.
+Como a EDA demonstrou, a variável alvo é fortemente enviesada à direita,
+violando a premissa de normalidade. Por essa razão, a \textbf{ANOVA paramétrica
+foi deliberadamente descartada} — produziria valores-$p$ pouco fiáveis — em
+favor de duas alternativas:
+\begin{itemize}
+\item \textbf{Teste t de Welch} (\texttt{equal\_var=False}): para as variáveis
+      binárias (\texttt{IS\_WEEKEND}, \texttt{IS\_HOLIDAY\_MONTH}), comparando a
+      média de atraso entre dois grupos. Optou-se pela variante de Welch, e não
+      pelo t de Student clássico, por \emph{não} assumir igualdade de
+      variâncias entre os grupos — premissa irrealista dado o desequilíbrio
+      dimensional e a heterocedasticidade observada.
+\item \textbf{Teste de Kruskal-Wallis:} alternativa não-paramétrica à ANOVA
+      (baseada em ordenações, não em médias), para as variáveis multiclasse
+      (\texttt{TIME\_OF\_DAY}, \texttt{SEASON}, \texttt{FLIGHT\_TYPE},
+      \texttt{DAY\_OF\_WEEK}, \texttt{MONTH}). Por operar sobre \textit{ranks},
+      é robusto à assimetria e aos \textit{outliers} da cauda direita.
+\end{itemize}
+A validação das \textit{features} numéricas contínuas, por sua vez, usou a
+correlação de \textbf{Pearson} com o respetivo teste de significância.
+
+\subsection{Resultados}
+A Tabela~\ref{tab:hypo} consolida os resultados. \textbf{Todas} as variáveis
+categóricas engenheiradas apresentaram relação altamente significativa com o
+atraso, com valores-$p$ ordens de grandeza abaixo de $\alpha$. Nos testes de
+Welch, tanto o fim de semana ($p \approx 1{,}35\times10^{-15}$) como — de forma
+extrema — o mês de férias ($p \approx 7{,}38\times10^{-305}$) afetam
+significativamente o atraso. Os testes de Kruskal-Wallis para as variáveis
+multiclasse devolveram $p < 0{,}0001$ (virtualmente zero). Rejeita-se assim,
+firmemente, $H_0$ para a totalidade das \textit{features}.
+
+\begin{table}[h]
+\centering
+\caption{Resultados dos testes de hipóteses ($\alpha = 0{,}05$)}
+\label{tab:hypo}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.4cm}p{2.1cm}p{1.5cm}p{1.0cm}}
+\toprule
+\textbf{Variável} & \textbf{Teste} & \textbf{valor-$p$} & \textbf{$H_0$} \\
+\midrule
+\texttt{IS\_WEEKEND}       & Welch $t$        & $1{,}35\times10^{-15}$  & Rejeita \\
+\texttt{IS\_HOLIDAY\_MONTH}& Welch $t$        & $7{,}38\times10^{-305}$ & Rejeita \\
+\texttt{TIME\_OF\_DAY}     & Kruskal-Wallis   & $<10^{-4}$              & Rejeita \\
+\texttt{SEASON}            & Kruskal-Wallis   & $<10^{-4}$              & Rejeita \\
+\texttt{FLIGHT\_TYPE}      & Kruskal-Wallis   & $<10^{-4}$              & Rejeita \\
+\texttt{DAY\_OF\_WEEK}     & Kruskal-Wallis   & $<10^{-4}$              & Rejeita \\
+\texttt{MONTH}             & Kruskal-Wallis   & $<10^{-4}$              & Rejeita \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Quanto às variáveis numéricas, a correlação de Pearson confirma o quadro da
+EDA: o \textit{Target Encoding} foi a engenharia mais bem-sucedida —
+\texttt{AVG\_DELAY\_PER\_HOUR} apresenta a correlação mais forte com o alvo
+($r \approx 0{,}09$) — enquanto a distância e a velocidade planeada exibem
+correlações residuais ($r \approx 0{,}01$). Há aqui uma síntese importante: as
+\textit{features} são estatisticamente significativas (têm sinal real) mas
+linearmente fracas (o sinal não é linear). Significância estatística e força
+linear são dimensões distintas, e é precisamente essa distinção que sustenta a
+opção por modelos não-lineares.
+
+\subsection{Estratégia de Seleção de Modelos e Avaliação}
+Concluída a preparação e a validação estatística, a evidência acumulada
+(falha do PCA, importância por permutação, correlações lineares nulas mas
+significância estatística máxima) aponta de forma unânime para um problema
+\textbf{não-linear}. A estratégia de modelação foi desenhada em conformidade:
+\begin{itemize}
+\item \textbf{KNN \textit{from scratch}} como \textit{baseline} não-paramétrico,
+      tirando partido do espaço estandardizado;
+\item \textbf{modelos baseados em árvores} (Árvore de Decisão, Random Forest,
+      Gradient Boosting), naturalmente aptos a capturar interações
+      não-lineares;
+\item \textbf{redes neuronais} (MLP) para dados tabulares; e
+\item \textbf{clustering} de aeroportos para análise não supervisionada.
+\end{itemize}
+
+A metodologia de avaliação privilegia métricas robustas ao desequilíbrio de
+classes — Precisão, \textit{Recall}, F1 por classe e, sobretudo, \textbf{Macro
+F1} (média não ponderada que penaliza igualmente os erros em todas as classes)
+— com a matriz de confusão como instrumento analítico central para distinguir
+falsos positivos de falsos negativos entre severidades. O tratamento do
+desequilíbrio é feito em duas camadas: um balanceamento binário global
+(50/50 pontual/atrasado) já aplicado no carregamento (Fase 1) e, sobre o
+remanescente desequilíbrio \emph{triclasse} (73/10/17), o uso de
+\texttt{class\_weight=`balanced'} em cada modelo e, em experiências dedicadas
+(Exp.~2), \textit{undersampling} adicional até à classe minoritária — com
+validação cruzada na otimização de hiperparâmetros. Esta articulação entre
+preparação e modelação é o fio condutor que liga a Fase 1 às Fases 4–6.
+
+% ===============================================================
+\section{Fase 4: Construção de Modelos}
+
+\subsection{K-Nearest Neighbors — Implementação de Raiz (\texttt{Knn.py})}
+
+O requisito de implementação \textit{from scratch} foi cumprido com exclusividade:
+a classe \texttt{Knn} usa apenas \texttt{numpy} e \texttt{collections.Counter},
+sem qualquer chamada a bibliotecas de ML. Isto torna o KNN o único modelo do
+projeto em que cada linha de código de inferência é visível e auditável.
+
+\subsubsection{Algoritmo e Complexidade}
+O método \texttt{fit} simplesmente memoriza o conjunto de treino como arrays
+NumPy — o KNN é um \emph{lazy learner} e não tem fase de otimização. Na inferência,
+para cada ponto de teste $\mathbf{x}$, a distância Euclidiana é calculada
+\textbf{vetorialmente} contra todo o treino via \texttt{np.linalg.norm}:
+\begin{equation}
+d(\mathbf{x}, \mathbf{x}_i) = \left\|\mathbf{x} - \mathbf{x}_i\right\|_2
+= \sqrt{\sum_{j=1}^{d}(x_j - x_{i,j})^2}
+\end{equation}
+Os $k$ índices mais próximos são selecionados por \texttt{np.argsort(distances)[:k]}
+e a classe é determinada por votação maioritária via \texttt{Counter.most\_common(1)}:
+\begin{equation}
+\hat{y} = \underset{c}{\arg\max} \sum_{i \in \mathcal{N}_k(\mathbf{x})} \mathbf{1}[y_i = c]
+\end{equation}
+A complexidade de inferência por ponto é $O(N \cdot d)$ com $N$ = tamanho do
+treino e $d$ = dimensionalidade, tornando o custo total $O(N_{\text{test}} \cdot N_{\text{train}} \cdot d)$.
+Com $N_{\text{train}} = 200\,000$ e $d = 22$ (features numéricas do dataset
+preprocessado), a inferência no conjunto completo de 50.000 pontos de teste
+levaria $\approx$2,2 mil milhões de operações por ponto — impraticável sem
+aceleração.
+
+\subsubsection{Configuração Exacta e Dados de Entrada}
+O modelo é treinado com $k=5$ sobre o conjunto preprocessado e escalonado
+(\texttt{data\_loader\_preprocessed.pkl}). As \textit{features} categóricas
+(codificadas com \textit{LabelEncoder} + \textit{MinMaxScaler}) e as numéricas
+(\textit{StandardScaler}) estão todas no mesmo espaço escalonado —
+\textbf{condição indispensável} para que a distância Euclidiana seja equitativa
+entre dimensões. A variável alvo é a classe triclasse, aplicada pela mesma
+função de categorização usada em todos os outros modelos:
+$\textit{ARR\_DELAY} < 15 \to 0$; $[15,30] \to 1$; $>30 \to 2$.
+
+A avaliação foi restrita a \textbf{5.000 exemplos de teste}
+(\texttt{X\_test\_scaled[:5000]}) — os primeiros 5.000 da divisão original —
+imposta pela inviabilidade computacional da pesquisa exaustiva. Esta
+granularidade limita a robustez estatística das estimativas, em particular para
+as classes minoritárias.
+
+\begin{table}[h]
+\centering
+\caption{KNN — Desempenho ($k=5$, $n_{\text{train}}=200\,000$, $n_{\text{test}}=5\,000$)}
+\label{tab:knn}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Métrica} & \textbf{Valor} & \textbf{Nota} \\
+\midrule
+Exatidão        & $\approx 60\%$ & Sub-amostra 5k \\
+F1 \textit{On-time}     & $\approx 0.72$ & Classe maioritária \\
+F1 \textit{Short delay} & $\approx 0.14$ & Classe mais difícil \\
+F1 \textit{Long delay}  & $\approx 0.25$ & \\
+Macro F1        & $\approx 0.37$ & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Análise dos Resultados}
+O KNN estabelece o \textit{baseline} não-paramétrico. O Macro F1~$\approx$~0.37
+demonstra que a distância Euclidiana no espaço escalonado captura sinal relevante:
+os vizinhos mais próximos de um voo são, em média, melhores preditores do que
+um classificador aleatório ou um preditor de classe maioritária. Porém, o F1
+de \textit{Short} = 0.14 documenta o problema estrutural da classe intermédia —
+a sua janela de 15 min é tão estreita que muitos vizinhos de um voo
+\textit{Short} verdadeiro são voos \textit{On-time} ou \textit{Long}, levando à
+votação maioritária errada.
+
+A desvantagem operacional é irrefutável: sem estruturas de índice
+(KD-Tree, Ball-Tree), o KNN é um algoritmo de produção inviável nesta escala.
+A sua utilidade é estritamente de \textit{baseline} e de prova de conceito
+da implementação.
+
+% -------
+\subsection{Aprendizagem Supervisionada Clássica (\texttt{SupervisedModels.py})}
+
+Os dois modelos supervisionados clássicos foram implementados na classe
+\texttt{SupervisedModels}, que os instancia num dicionário e itera sobre ambos
+com a mesma interface de treino e avaliação. Os dados de entrada são os do
+checkpoint preprocessado, subamostrados a \textbf{100.000 exemplos de treino}
+e avaliados no conjunto completo de \textbf{50.000 de teste}. A subamostragem
+de treino é necessária pela velocidade de ajuste, em particular da Regressão
+Logística com \texttt{max\_iter=3000}.
+
+\subsubsection{Árvore de Decisão (\texttt{DecisionTreeClassifier})}
+A \textit{Decision Tree} particiona o espaço de \textit{features} por limiares
+binários recursivos, maximizando a redução de impureza de Gini em cada nó.
+Parâmetros exactos: \texttt{random\_state=42}, \texttt{class\_weight=`balanced'};
+\textbf{sem restrição de profundidade} (\texttt{max\_depth=None}), o que significa
+que a árvore cresce até à pureza total nos nós folha — comportamento com
+\textit{overfitting} expectável sobre o treino, mas com capacidade máxima de
+capturar interações não-lineares complexas.
+
+O \texttt{class\_weight=`balanced'} ajusta os pesos de cada classe
+inversamente proporcional à sua frequência no treino:
+$w_c = \frac{N}{k \cdot N_c}$, onde $N$ é o número total de exemplos,
+$k$ o número de classes e $N_c$ a frequência da classe $c$. Isto compensa
+o desequilíbrio 73/10/17 sem remover dados.
+
+\subsubsection{Regressão Logística (\texttt{LogisticRegression})}
+Estima probabilidades de classe por \textit{softmax} multiclasse sobre uma
+combinação linear das \textit{features}. Parâmetros: \texttt{max\_iter=3000}
+(necessário para convergência no espaço de alta dimensão e desequilíbrio),
+\texttt{random\_state=42}, \texttt{class\_weight=`balanced'}, \texttt{n\_jobs=-1}
+(paralelização total). O solver padrão do sklearn (\textit{lbfgs}) é usado,
+adequado para problemas multiclasse com dimensões moderadas.
+
+\begin{table}[h]
+\centering
+\caption{Modelos Supervisionados — Resultados ($n_{\text{treino}}=100\,000$, $n_{\text{teste}}=50\,000$)}
+\label{tab:supervised}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Modelo} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+Árvore de Decisão   & $\approx 55\%$ & $\approx 0.67$ & $\approx 0.17$ & $\approx 0.26$ & $\approx 0.37$ \\
+Reg. Logística      & $\approx 57\%$ & $\approx 0.70$ & $\approx 0.15$ & $\approx 0.23$ & $\approx 0.36$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{01_confusion_matrix_decision_tree.png}
+    \caption{Matrizes de confusão — Árvore de Decisão (esq.) e Regressão
+    Logística (dir.). O erro dominante é a confusão de \textit{Short} com
+    \textit{On-time}: ambos os modelos subclassificam a classe 1 por
+    insuficiência de sinal na janela de 15 min.}
+    \label{fig:cm_supervised}
+\end{figure}
+
+\subsubsection{Análise dos Resultados}
+Ambos os modelos atingem Macro F1 semelhante ($\approx$0.36–0.37), mas por
+razões distintas. A Árvore de Decisão — sem profundidade limitada — é propensa
+a \textit{overfit}: memoriza padrões locais do treino mas generaliza mal para
+voos \textit{Long} pouco representados (F1 = 0.26). A Regressão Logística,
+sendo um modelo linear, só captura fronteiras de decisão planas no espaço das
+\textit{features}; a sua exatidão ligeiramente superior (57\% vs 55\%) reflete
+maior robustez à variância, não maior capacidade expressiva.
+
+O padrão dominante nas matrizes de confusão (Fig.~\ref{fig:cm_supervised}) é a
+\textbf{confusão massiva de \textit{Short} com \textit{On-time}}: os modelos
+lineares/raso não conseguem traçar uma fronteira de decisão coerente dentro da
+faixa estreita 15–30 min. Este resultado antecipa o que se observará em todos os
+modelos subsequentes e motiva a formulação hierárquica.
+
+\subsection{Modelos de \textit{Ensemble} (\texttt{Ensemble.py})}
+
+Os dois \textit{ensembles} foram implementados na classe \texttt{Ensemble},
+que suporta subsampling opcional e balanceamento de treino. Foram executadas
+duas experiências com os mesmos 200.000 exemplos de treino e 50.000 de teste:
+\textbf{Exp.~1} — distribuição original sem reamostragem;
+\textbf{Exp.~2} — \textit{undersampling} triclasse até à classe minoritária
+(\textit{Short}, $\approx$10\%) — produzindo um treino perfeitamente balanceado
+a 33\%/33\%/33\% via selecção aleatória com \texttt{np.random.default\_rng}.
+
+\subsubsection{Random Forest — Bagging (\texttt{RandomForestClassifier})}
+O \textit{Random Forest}~\cite{breiman} constrói um conjunto de
+\texttt{n\_estimators=100} árvores, cada uma treinada sobre uma amostra
+\textit{bootstrap} com reposição do conjunto de treino e avaliando apenas um
+subconjunto aleatório de \textit{features} em cada nó. Esta dupla aleatoriedade
+(amostragem de dados + amostragem de \textit{features}) descorrela as árvores
+individualmente e reduz a variância do conjunto. Parâmetros exactos usados na
+classe \texttt{Ensemble}: \texttt{n\_estimators=100}, \texttt{max\_depth=None}
+(árvores crescem até pureza), \texttt{random\_state=42}, \texttt{n\_jobs=-1}.
+A inexistência de \texttt{class\_weight} nesta configuração significa que o
+desequilíbrio de classes (73/10/17) é tratado \emph{apenas} pela reamostragem
+na Exp.~2 — na Exp.~1, as árvores otimizam sem penalização de classe.
+
+\subsubsection{HistGradientBoosting — Boosting (\texttt{HistGradientBoostingClassifier})}
+O \textit{HistGradientBoosting}~\cite{friedman} treina árvores \emph{sequencialmente}:
+cada nova árvore ajusta os \emph{pseudo-resíduos} (gradiente da \textit{loss}
+em relação à predição acumulada) das anteriores. A variante de histograma
+agrupa os valores contínuos de cada \textit{feature} em \textit{bins} discretos
+antes do treino, reduzindo a complexidade de busca de limiares de $O(N)$ para
+$O(B)$ por nó (onde $B \ll N$ é o número de \textit{bins}), tornando-o
+$5$–$10\times$ mais rápido do que o GBM clássico. Parâmetros:
+\texttt{max\_iter=200}, \texttt{learning\_rate=0.1}, \texttt{max\_depth=None},
+\texttt{random\_state=42}.
+
+\begin{table}[h]
+\centering
+\caption{Ensemble — Configuração e Resultados Comparativos}
+\label{tab:ensemble}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{p{0.5cm}p{0.7cm}p{1.0cm}ccccc}
+\toprule
+\textbf{Exp.} & \textbf{Mod.} & \textbf{Dados} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+\multirow{2}{*}{1} & RF  & Original & $\approx63\%$ & $\approx0.76$ & $\approx0.21$ & $\approx0.10$ & $\approx0.35$ \\
+                   & HGB & Original & $\approx65\%$ & $\approx0.77$ & $\approx0.24$ & $\approx0.13$ & $\approx0.38$ \\
+\midrule
+\multirow{2}{*}{2} & RF  & Balanceado & $\approx49\%$ & $\approx0.58$ & $\approx0.23$ & $\approx0.28$ & $\approx0.36$ \\
+                   & HGB & Balanceado & $\approx51\%$ & $\approx0.60$ & $\approx0.25$ & $\approx0.29$ & $\approx0.38$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Análise dos Resultados e \textit{Trade-offs}}
+A Exp.~1 confirma que o HGB supera o RF em exatidão (+2 p.p.) e em Macro F1
+(0.38 vs 0.35), beneficiando da sequencialidade do ajuste de resíduos: cada
+iteração foca-se precisamente nos voos que as iterações anteriores erraram.
+O RF, por construção paralela e independente das árvores, não tem este mecanismo
+de correção dirigida.
+
+O resultado mais instrutivo é o \textit{trade-off} entre Exp.~1 e Exp.~2.
+O balanceamento triclasse reduz drasticamente a exatidão global ($-14$ p.p. para
+o RF, $-14$ p.p. para o HGB) mas \textbf{melhora o F1 de \textit{Long delay}}
+em $+0.15$–$0.17$ p.p. — a classe com menor representação beneficia mais da
+eliminação do viés maioritário. O Macro F1, por ser não-ponderado, permanece
+quase estável (0.35–0.38), confirmando que o ganho nas classes minoritárias
+compensa a perda na majoritária. Esta é a evidência empírica que motiva o uso
+do Macro F1 como métrica primária: acurácia global oculta o real desempenho
+em classes operacionalmente relevantes.
+
+\subsection{Aprendizagem Profunda — MLP (\texttt{DeepLearning.py})}
+
+\subsubsection{Justificação da Arquitectura e Decisões de Design}
+O dataset é estritamente tabular: cada voo é uma linha independente descrita
+por um vetor de comprimento fixo. Não existe estrutura espacial (CNN) nem
+sequência temporal por amostra (RNN/LSTM) — as \textit{features} temporais já
+estão engenheiradas como atributos estáticos. O \textit{Multi-Layer Perceptron}
+(MLP) é a arquitectura canónica para dados tabulares~\cite{tensorflow}: consegue
+aprender fronteiras de decisão arbitrariamente não-lineares e é implementado
+com \texttt{tf.keras.Sequential}.
+
+A arquitectura base (Tabela~\ref{tab:mlp_arch}) usa três camadas ocultas de
+tamanhos decrescentes (128 → 64 → 32), cada uma seguida de
+\texttt{BatchNormalization} e \texttt{Dropout}. As dimensões decrescentes
+induzem uma hierarquia de representações do geral para o específico. O
+\texttt{BatchNorm} acelera a convergência ao normalizar as activações de cada
+\textit{mini-batch}, reduzindo o desvio interno de covariáveis. O
+\texttt{Dropout} com taxa 0.3 nas primeiras duas camadas e 0.2 na última
+actua como regularizador ao desactivar aleatoriamente neurónios durante o
+treino, impedindo a co-adaptação excessiva.
+
+\begin{table}[h]
+\centering
+\caption{Arquitectura MLP Partilhada — Camada por Camada}
+\label{tab:mlp_arch}
+\begin{tabular}{p{1.5cm}p{3.2cm}p{2.5cm}}
+\toprule
+\textbf{Camada} & \textbf{Configuração} & \textbf{Papel} \\
+\midrule
+Dense 128 & ReLU + BatchNorm + Dropout(0.3) & Representação primária \\
+Dense 64  & ReLU + BatchNorm + Dropout(0.3) & Compressão \\
+Dense 32  & ReLU + BatchNorm + Dropout(0.2) & Abstracção final \\
+Dense 3   & Softmax / bias$=\log p_0$        & Classificação 3 classes \\
+Dense 2   & Softmax / bias$=\log p_0$        & Classificação binária \\
+Dense 1   & Linear                           & Regressão em minutos \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent\textbf{Parâmetros de treino comuns a todas as variantes:}
+Optimizador Adam ($\text{lr}=10^{-3}$); 80 épocas máximas; \textit{batch
+size} 512; divisão interna de validação 20\% (\texttt{train\_test\_split}
+estratificado por classe); \texttt{ReduceLROnPlateau}(monitor=\texttt{val\_loss},
+factor=0.5, patience=5). A \textit{class\_weight} é calculada automaticamente
+pelo sklearn (\texttt{compute\_class\_weight(`balanced',\ldots)}) para a
+classificação sem \textit{undersampling}.
+
+\noindent\textbf{Inicialização do \textit{bias} de saída com
+$\log(\text{priors})$:} A saída \textit{softmax} converge, no início do treino,
+para os \textit{priors} das classes se o \textit{bias} for inicializado a
+$\log(p_c)$ (onde $p_c$ é a proporção da classe $c$ no treino). Isto dá à rede
+um ponto de partida que já corresponde à distribuição marginal — o optimizador
+não desperdiça épocas iniciais a aprender o \textit{prior} e começa logo a
+ajustar as fronteiras de decisão.
+
+\subsubsection{Bug Estrutural: Colapso para Preditor Maioritário}
+O primeiro treino produziu 73\% de exatidão com \textit{recall}
+1.00/0.00/0.00 — o modelo prediz \textit{On-time} para \textbf{todos} os voos
+(preditor degenerado). A causa raiz é uma interacção subtil entre quatro
+decisões simultâneas do Keras:
+\begin{enumerate}
+\item \texttt{class\_weight=`balanced'} re-pondera a \textit{loss de treino},
+      tornando os exemplos raros mais influentes durante a retropropagação.
+\item A \textit{val\_loss} (\textit{cross-entropy} de validação) é calculada
+      \textbf{sem ponderação} — é a \textit{loss} bruta sobre a distribuição real
+      73/10/17.
+\item Com esta distribuição, a \textit{cross-entropy} não ponderada é
+      \emph{minimizada} pelo preditor constante-maioritário: prever
+      \textit{On-time} com probabilidade 1 dá $-\log(0.73) \approx 0.31$, abaixo
+      de qualquer predição incerta.
+\item A inicialização de \textit{bias} com $\log(\text{priors})$ faz com que as
+      \emph{primeiras épocas} — antes de qualquer aprendizagem útil — já produzam
+      um softmax próximo dos priors, gerando a \textbf{menor \textit{val\_loss}}
+      de toda a execução. \texttt{EarlyStopping(restore\_best\_weights=True)}
+      reverte então o modelo a esse estado inicial degenerado, descartando todo
+      o progresso subsequente.
+\end{enumerate}
+Este \textit{bug} é particularmente insidioso porque a exatidão de 73\% parece
+razoável — só a inspecção do \textit{recall} por classe revela o colapso.
+
+\subsubsection{Correção: Callback \texttt{MacroF1Monitor}}
+A solução substitui o \texttt{EarlyStopping(val\_loss)} por um \textit{callback}
+personalizado que monitoriza o \textbf{Macro F1 de validação}. O Macro F1 é
+imune ao colapso maioritário por construção: um preditor constante que classifica
+tudo como \textit{On-time} obtém F1=1 nessa classe, F1=0 nas outras duas, e
+portanto Macro F1~$\approx$~0.33 — nunca o máximo. O \textit{callback} guarda os
+pesos da melhor época em memória (\texttt{get\_weights}) e restaura-os no fim
+(\texttt{set\_weights}), replicando o comportamento de
+\texttt{restore\_best\_weights=True} mas para a métrica correcta. A condição de
+melhoria exige um aumento mínimo de $10^{-4}$ para evitar oscilações numéricas:
+
+\begin{lstlisting}[caption=MacroF1Monitor (DeepLearning.py)]
+class MacroF1Monitor(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        preds = self.model.predict(
+            self.X_val, verbose=0).argmax(axis=1)
+        macro_f1 = f1_score(self.y_val, preds,
+            average='macro', zero_division=0)
+        if macro_f1 > self.best_f1 + 1e-4:
+            self.best_f1 = macro_f1
+            self.best_weights = self.model.get_weights()
+            self.wait = 0
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.model.stop_training = True
+    def on_train_end(self, logs=None):
+        self.model.set_weights(self.best_weights)
+\end{lstlisting}
+
+Esta \textbf{única} alteração — sem mudar arquitectura, optimizador, dados ou
+pesos de classe — fez o Macro F1 passar de 0.28 (degenerado) para \textbf{0.42}.
+
+\subsubsection{MLP Plano — Classificação (Exp.~1, 1b, 2)}
+Três variantes foram executadas sobre os mesmos 200k/50k exemplos
+(Tabela~\ref{tab:mlp_flat}):
+
+\begin{table}[h]
+\centering
+\caption{MLP Plano — Três Variantes de Classificação}
+\label{tab:mlp_flat}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.4cm}p{2.2cm}ccccc}
+\toprule
+\textbf{Exp.} & \textbf{Alteração} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+Exp.~1 & MacroF1Mon. & 70.0\% & 0.84 & 0.25 & 0.17 & \textbf{0.42} \\
+Exp.~1b & No BatchNorm + pesos $\{0:1,1:5,2:2.5\}$ & 73.0\% & 0.84 & 0.00 & 0.00 & 0.28$^\dagger$ \\
+Exp.~2 & \textit{Undersampling} 3cl & 26.5\% & 0.37 & 0.19 & 0.05 & 0.21 \\
+\bottomrule
+\multicolumn{7}{l}{$^\dagger$Colapso maioritário — recall 1.00/0.00/0.00.} \\
+\end{tabular}
+\end{table}
+
+A \textbf{Exp.~1b} foi um \textit{stress-test} de sobre-correcção: removeu-se
+o \texttt{BatchNorm} e usaram-se pesos manuais $\{0:1.0,\;1:5.0,\;2:2.5\}$
+em vez dos calculados pelo sklearn. O raciocínio era que forçar um peso maior
+na classe minoritária poderia resolver o colapso — mas o resultado foi o
+oposto: o modelo re-colapsou (Macro F1 = 0.28). A explicação é que as três
+intervenções simultâneas (remoção de BatchNorm, pesos mais extremos, retenção
+do mesmo callback) empurram a optimização de forma inconsistente e desestabilizam
+o gradiente. A Exp.~1b documenta que \texttt{MacroF1Monitor} é a intervenção
+\textbf{necessária e suficiente} — intervenções adicionais pioram.
+
+A \textbf{Exp.~2} substituiu os pesos de classe pelo \textit{undersampling}
+triclasse até à classe minoritária (Short, $\approx$10\%), reduzindo o treino
+efectivo em $\approx 3\times$. A convergência prematura num conjunto menor
+degradou o desempenho (Macro F1 = 0.21), confirmando que a penalização via
+pesos é preferível à remoção de dados.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{07_loss_curve.png}
+    \caption{MLP Exp.~1 — curva de \textit{loss} (esq.) e Macro F1 de validação
+    (dir.) por época. A instabilidade da \textit{val\_loss} prova que não pode
+    ser critério de paragem; o \texttt{MacroF1Monitor} termina na época de
+    Macro F1 máximo (paciência 10 sem melhoria de $>10^{-4}$).}
+    \label{fig:mlp_history}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\columnwidth]{08_confusion_matrix_mlp_deep_learning.png}
+    \caption{Matriz de confusão — MLP Plano Exp.~1. O padrão dominante é a
+    classificação de voos \textit{Short} e \textit{Long} como \textit{On-time}:
+    o modelo aprendeu a fronteira de atraso relevante mas não consegue distinguir
+    a sua magnitude com as \textit{features} pré-partida disponíveis.}
+    \label{fig:cm_mlp}
+\end{figure}
+
+\subsubsection{MLP de Regressão Plana (Exp.~3)}
+O \textit{backbone} idêntico, com saída \textbf{linear} (Dense 1) e
+\textit{loss} MSE, foi treinado para prever \texttt{ARR\_DELAY} em minutos
+directamente sobre o conjunto completo. O resultado é $R^2 = -28.04$ —
+dramaticamente pior do que um preditor de média. O mecanismo é preciso: o MSE é
+minimizado por prever a média do alvo; com $\approx$73\% dos exemplos com
+\texttt{ARR\_DELAY}~$\approx$~0, a média global é próxima de zero, e o MSE de
+um preditor constante nulo sobre o conjunto completo é muito baixo. O regressor
+converge exactamente para este comportamento degenerado, e o $R^2$ negativo
+certifica que a rede é \emph{pior} do que a média amostral. A variância residual
+é dominada por eventos do dia operacional ausentes do dataset: meteorologia em
+tempo real, atrasos em cascata por aeronave e congestionamento do espaço aéreo.
+
+\subsubsection{MLP Hierárquico de 2 Estágios (\texttt{HierarchicalDeepLearning.py})}
+Para decompor o problema em duas subtarefas especializadas, foi implementada
+uma cascata de dois estágios na classe \texttt{HierarchicalDeepLearning}.
+
+\noindent\textbf{Estágio 1 — Classificador Binário:} Arquitectura MLP partilhada
+com cabeça \textit{softmax} de 2 saídas (\textit{On-time} vs \textit{Delayed},
+$\geq$15 min). Treinado nos 200k exemplos completos com
+\texttt{class\_weight=`balanced'} computado pelo sklearn e \texttt{MacroF1Monitor}
+(patience=10). A divisão interna de validação é \textbf{estratificada por
+rótulo binário} (\texttt{stratify=y\_train\_bin}) para garantir representação
+equilibrada em ambas as partições.
+
+\noindent\textbf{Estágio 2 — Regressor de Minutos:} Mesmo \textit{backbone}
+com saída linear. Treinado \textbf{exclusivamente} nos voos atrasados do treino
+(\texttt{ARR\_DELAY}~$\geq$~15): a máscara \texttt{y\_train\_bin == 1} selecciona
+$\approx$100k voos com atraso, eliminando o ruído introduzido pelos 100k voos
+pontuais (alvo = 0). Para o Estágio 2, usa-se \textbf{EarlyStopping(val\_loss)}
+— o problema de colapso maioritário não existe na regressão, onde a
+\textit{val\_loss} (MSE) é uma métrica de minimização directamente alinhada com
+o objectivo.
+
+\noindent\textbf{Inferência e composto triclasse:} Para cada voo de teste, o
+Estágio 1 produz $p_{\text{delayed}}$; se $p_{\text{delayed}} \geq 0.5$
+(threshold fixo), o Estágio 2 prevê os minutos; caso contrário, prediz-se
+0 min. O composto triclasse é obtido por \textit{binning} da saída do
+Estágio 2: minutos $< 30 \to $ \textit{Short}; $\geq 30 \to $ \textit{Long}.
+
+\begin{table}[h]
+\centering
+\caption{Hierárquico 2 Estágios — Métricas por Componente}
+\label{tab:stage1_binary}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Componente} & \textbf{Métrica} & \textbf{Valor} & \textbf{Âmbito} \\
+\midrule
+Estágio 1 (binário) & Exatidão         & 68.1\%  & 50k teste \\
+                    & F1 \textit{Delayed} & 0.475  & \\
+                    & \textbf{Macro F1}  & \textbf{0.623} & \\
+\midrule
+Estágio 2 (reg.)   & RMSE             & 93.14 min & Subconj.\ atrasados \\
+                   & MAE              & 45.73 min & \\
+                   & $R^2$            & $-0.009$  & \\
+\midrule
+Composto E2E       & Exatidão (3cl.)  & 57.2\%  & 50k teste \\
+                   & Macro F1 (3cl.)  & 0.360   & \\
+                   & MAE ponta-a-ponta & 45.7 min & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\columnwidth]{17_stage_1_confusion_matrix_threshold05.png}
+    \caption{Matriz de confusão — Estágio 1 binário (threshold = 0.5).
+    Macro F1 = 0.623: melhor resultado binário do projecto. O ganho face ao
+    MLP triclasse (0.42) explica-se pela menor assimetria 73/27 vs 73/10/17
+    e pela concentração de capacidade numa única fronteira.}
+    \label{fig:cm_stage1_binary}
+\end{figure}
+
+O Estágio 2 atinge $R^2 \approx -0.009$ mesmo treinado \emph{apenas} em voos
+atrasados — quase igual a um preditor de média. Isto demonstra que o problema
+de regressão ao minuto é irredutível com as \textit{features} disponíveis,
+independentemente de filtrar os voos pontuais. O Estágio 1 binário, porém, é
+o melhor classificador do projecto: Macro F1 = 0.623 face a 0.42 do MLP plano.
+
+\subsubsection{MLP Hierárquico de 3 Estágios (\texttt{ThreeStageHierarchical.py})}
+O modelo de 2 estágios já isola a decisão binária da magnitude. O problema
+remanescente no Estágio 2 é que um único regressor cobre o intervalo
+$[15, +\infty)$ misturando dois regimes de distribuição muito distintos: o
+aglomerado denso e estreito 15–30 min e a cauda longa e pesada dos atrasos
+prolongados. A proposta do docente estende a cascata a \textbf{três estágios}
+implementados na classe \texttt{ThreeStageHierarchical}:
+
+\begin{itemize}
+\item \textbf{Estágio 1:} classificador triclasse nativo (softmax 3 saídas),
+      mesmo backbone, \texttt{class\_weight=`balanced'}, \texttt{MacroF1Monitor},
+      divisão de validação estratificada por classe triclasse.
+\item \textbf{Estágio 2a:} regressor treinado \textbf{exclusivamente} nos voos
+      Short do treino (\texttt{y\_train\_3c == 1}, alvo $\in [15,30]$ min).
+      \textit{EarlyStopping(val\_loss)}, loss MSE. O alvo estreito torna o MSE
+      mais fácil de minimizar.
+\item \textbf{Estágio 2b:} regressor treinado \textbf{exclusivamente} nos voos
+      Long (\texttt{y\_train\_3c == 2}, alvo $> 30$ min). Especializado na cauda
+      pesada, sem interferência do aglomerado 15–30 min.
+\item \textbf{Inferência:} o Estágio 1 encaminha cada voo: \textit{On-time} →
+      prediz 0 min; \textit{Short} → Estágio 2a; \textit{Long} → Estágio 2b.
+\end{itemize}
+
+A avaliação de cada regressor é feita sobre o \textbf{subconjunto verdadeiro}
+do teste (\texttt{y\_test\_3c == 1} ou \texttt{== 2}), isolando a qualidade
+intrínseca de cada regressor do erro de classificação do Estágio 1.
+
+\begin{table}[h]
+\centering
+\caption{3 Estágios — Métricas por Componente e Ponta-a-Ponta}
+\label{tab:three_stage}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.4cm}ccccc}
+\toprule
+\textbf{Componente} & \textbf{RMSE} & \textbf{MAE} & \textbf{R\textsuperscript{2}} & \textbf{Macro F1} & \textbf{Acc.} \\
+\midrule
+Estágio 1 (3cl.) & — & — & — & 0.33 & 45.8\% \\
+Estágio 2a (Short) & 6.03 & 5.10 & $-0.754$ & — & — \\
+Estágio 2b (Long) & 124.75 & 62.23 & $-0.324$ & — & — \\
+E2E cascata & 58.72 & 26.09 & — & — & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O resultado mais relevante é o Estágio 2a: \textbf{MAE = 5.10 min, RMSE = 6.03
+min} sobre os voos verdadeiramente Short do teste — um ganho de $\approx$9$\times$
+face ao regressor único do modelo de 2 estágios (MAE = 45.73 min). A especialização
+é a única causa do ganho: o modelo 2a nunca vê um único voo pontual ou de longo
+atraso, pelo que o seu gradiente é guiado exclusivamente pela distribuição estreita
+$[15,30]$. O Estágio 2b, apesar de mais especializado, atinge RMSE = 124.75 min:
+a cauda longa tem variância muito elevada — atrasos de 30 min a 500+ min — e
+nenhuma \textit{feature} pré-partida captura os eventos que a causam.
+
+O custo da cascata é o \textbf{erro de encaminhamento composto}: um voo
+\textit{Long} verdadeiro classificado como \textit{Short} pelo Estágio 1 é
+enviado ao regressor 2a, cuja saída está limitada a $\approx$30 min, produzindo
+erro sistemático. O MAE de ponta a ponta (26.09 min) reflete este erro composto
+e é significativamente pior do que as métricas por subconjunto verdadeiro.
+
+\noindent\textbf{Nota sobre o $R^2$ negativo do Estágio 2a:} O facto de
+$R^2 = -0.754$ ser negativo mesmo com MAE = 5.10 min é aparentemente paradoxal.
+A explicação: o $R^2$ compara o MSE do modelo com o MSE de um preditor da média
+da \emph{amostra de avaliação}. A média dos atrasos Short verdadeiros é
+$\approx$22 min, e a variância intra-classe é suficientemente grande para que
+prever a média seja melhor (em MSE) do que qualquer regressão baseada nas
+\textit{features} pré-partida. O modelo tem erros médios baixos (MAE = 5.10)
+mas não consegue superar o preditor trivial em MSE — mais uma evidência do piso
+de ruído irredutível.
+
+\subsection{Agrupamento de Aeroportos (\texttt{Clustering.py})}
+
+\subsubsection{Entidade, Agregação e \textit{Features}}
+O clustering foi aplicado a \textbf{aeroportos} (entidade operacional natural):
+um aeroporto é caracterizado pelo perfil agregado de todos os voos que
+origina — não faz sentido clusterizar voos individuais, pois cada voo é um
+evento independente sem identidade persistente. A classe \texttt{Clustering}
+recebe o \textbf{checkpoint de dados limpos} (\texttt{data\_loader\_cleaned.pkl},
+antes da codificação) para que a coluna \texttt{ORIGIN} ainda contenha os
+códigos IATA em texto, necessários para o \texttt{groupby}.
+
+A agregação usa os primeiros 300.000 voos (\texttt{sample\_size=300000}) e
+filtra aeroportos com menos de 30 voos (\texttt{min\_flights=30}), retendo
+\textbf{306 aeroportos}. A matriz de \textit{features} resultante tem
+\textbf{13 colunas} (Tabela~\ref{tab:cluster_features}), cobrindo quatro
+dimensões operacionais: volume, desempenho de pontualidade, perfil de rota e
+padrão temporal. Todas as \textit{features} são normalizadas com
+\texttt{StandardScaler} antes do clustering — condição essencial para que a
+distância Euclidiana e a distância de Ward (ambas usadas pelos algoritmos
+seguintes) não sejam dominadas por variáveis de grande amplitude.
+
+\begin{table}[h]
+\centering
+\caption{Features de aeroporto usadas no clustering}
+\label{tab:cluster_features}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.8cm}p{4.4cm}}
+\toprule
+\textbf{Feature} & \textbf{Definição} \\
+\midrule
+\texttt{n\_flights} & Número total de voos de origem \\
+\texttt{mean\_arr\_delay} & Média de \texttt{ARR\_DELAY} \\
+\texttt{std\_arr\_delay} & Desvio-padrão de \texttt{ARR\_DELAY} \\
+\texttt{median\_arr\_delay} & Mediana de \texttt{ARR\_DELAY} \\
+\texttt{mean\_distance} & Distância média das rotas \\
+\texttt{mean\_crs\_elapsed} & Tempo de voo planeado médio \\
+\texttt{pct\_ontime} & Fracção de voos \textit{On-time} \\
+\texttt{pct\_short} & Fracção de voos \textit{Short delay} \\
+\texttt{pct\_long} & Fracção de voos \textit{Long delay} \\
+\texttt{pct\_weekend} & Fracção de voos ao fim de semana \\
+\texttt{pct\_holiday\_month} & Fracção de voos em mês de férias \\
+\texttt{n\_destinations} & Número de destinos distintos \\
+\texttt{n\_airlines} & Número de companhias distintas \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{K-Means — Varredura sobre $k$ (\texttt{kmeans\_sweep})}
+Para seleccionar o número de \textit{clusters}, o K-Means foi executado para
+$k \in [2, 8]$ com \texttt{n\_init=10} reinicializações aleatórias por valor de
+$k$ (para mitigar a sensibilidade ao centroide inicial) e \texttt{random\_state=42}.
+Quatro métricas foram calculadas simultaneamente: inércia (\textit{elbow plot}),
+Silhouette (coesão vs separação, máximo = melhor), Davies-Bouldin (rácio intra/
+inter-cluster, mínimo = melhor) e Calinski-Harabász (\textit{ratio of between-to-
+within cluster scatter}, máximo = melhor).
+
+\begin{table}[h]
+\centering
+\caption{K-Means — Métricas por $k$ (306 aeroportos)}
+\label{tab:kmeans}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{ccccc}
+\toprule
+$k$ & Inércia & Silhouette & D.-Bouldin & C.-Harabász \\
+\midrule
+2 & 3\,233 & 0.193 & 1.845 & 70 \\
+\textbf{3} & \textbf{2\,689} & \textbf{0.208}$^{\dagger}$ & 1.501 & \textbf{73}$^{\dagger}$ \\
+4 & 2\,371 & 0.185 & 1.490 & 68 \\
+5 & 2\,152 & 0.195 & 1.454 & 64 \\
+6 & 2\,006 & 0.169 & 1.667 & 59 \\
+7 & 1\,893 & 0.189 & 1.550 & 55 \\
+8 & 1\,786 & 0.184 & 1.559 & 52 \\
+\bottomrule
+\multicolumn{5}{l}{$^\dagger$Máximo — $k=3$ selecionado pelo cotovelo e Silhouette.} \\
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{K-Means $k=3$ — Perfis Operacionais}
+\label{tab:kmeans_clusters}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.3cm}p{0.5cm}p{1.7cm}p{1.0cm}p{0.6cm}p{0.7cm}}
+\toprule
+\textbf{C} & \textbf{N} & \textbf{Top aeroportos} & \textbf{\={x} atraso} & $\sigma$ & \textbf{Pontual} \\
+\midrule
+0 & 35  & ASE, JAC, PGD & 44.9 min & 117 & 65\% \\
+1 & 152 & HNL, BUR, LGB & 19.0 min & 55  & \textbf{78\%} \\
+2 & 119 & ATL, DFW, ORD & 20.5 min & 60  & 74\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{19_k_means_sweep_over_k_airport.png}
+    \caption{K-Means — varredura sobre $k$: inércia (cotovelo), Silhouette e
+    Davies-Bouldin. O cotovelo suaviza-se em $k=3$, que também maximiza o
+    Silhouette.}
+    \label{fig:kmeans_sweep}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{20_k_means_clusters_k3_airport.png}
+    \caption{Projeção PCA dos 306 aeroportos colorida pelos 3 clusters
+    K-Means. O Cluster 0 (regional/lazer) separa-se ao longo do PC1 (28.9\% da
+    variância), que captura sobretudo o volume de tráfego.}
+    \label{fig:kmeans_pca}
+\end{figure}
+
+\textbf{Cluster 0 — Regional/Lazer} (35 aeroportos): aeroportos de resort e
+destinos de montanha como Aspen (ASE) e Jackson Hole (JAC). O desvio-padrão de
+atraso ($\sigma = 117$ min) é o mais elevado dos três clusters, reflectindo a
+exposição meteorológica extrema destes aeroportos e a sua menor resiliência
+operacional. A taxa de pontualidade de 65\% é a mais baixa.
+
+\textbf{Cluster 1 — Mainstream Médio} (152 aeroportos): aeroportos de dimensão
+intermédia — incluindo Honolulu (HNL), Burbank (BUR) e Long Beach (LGB) — com a
+melhor taxa de pontualidade (78\%) e desvio-padrão mais baixo ($\sigma = 55$ min).
+Este cluster representa a maioria dos aeroportos regionais dos EUA com operação
+disciplinada.
+
+\textbf{Cluster 2 — Grandes Hubs} (119 aeroportos): inclui ATL, DFW e ORD, com
+média de 2.280 voos por aeroporto. O atraso médio (20.5 min) é apenas
+marginalmente superior ao Cluster 1, demonstrando que o volume massivo de tráfego
+não implica necessariamente maior impunctualidade — a eficiência operacional à
+escala é mensurável nos dados.
+
+\subsubsection{DBSCAN — Varredura sobre $\varepsilon$ (\texttt{dbscan\_sweep})}
+O DBSCAN~\cite{dbscan} foi executado com \texttt{min\_samples=5} e varredura
+sobre $\varepsilon \in \{0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00\}$
+no espaço escalonado. A métrica de Silhouette é calculada apenas sobre os pontos
+\emph{não-classificados como ruído} (etiqueta $\neq -1$), com pelo menos 2
+\textit{clusters} formados.
+
+\begin{table}[h]
+\centering
+\caption{DBSCAN — Varredura sobre $\varepsilon$ ($\texttt{min\_samples}=5$)}
+\label{tab:dbscan}
+\begin{tabular}{ccccc}
+\toprule
+$\varepsilon$ & N. Clusters & N. Ruído & \% Ruído & Silhouette \\
+\midrule
+0.50 & 0  & 306 & 100\% & — \\
+1.00 & 2  & 275 & 90\%  & 0.223 \\
+\textbf{1.50} & \textbf{2} & \textbf{158} & \textbf{52\%} & \textbf{0.275} \\
+2.00 & 1  & 86  & 28\%  & — \\
+3.00 & 1  & 23  & 7.5\% & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+No melhor $\varepsilon = 1.5$ (máximo Silhouette), o DBSCAN forma 2 clusters
+mas classifica \textbf{158 de 306 aeroportos (52\%) como ruído}. Esta não é uma
+falha do algoritmo — é um \textbf{diagnóstico estrutural} de alta qualidade.
+O DBSCAN só forma \textit{clusters} em regiões de densidade suficiente
+($\geq$\texttt{min\_samples} pontos dentro de $\varepsilon$); ao recusar
+classificar 52\% dos pontos, está a identificar que o espaço de \textit{features}
+dos aeroportos é um \textbf{gradiente contínuo}, não um conjunto de aglomerados
+compactos e separados. Os 148 pontos não-ruído correspondem aos extremos do
+gradiente — os mega-hubs e os aeroportos de resort — que formam os dois
+\textit{clusters} com melhor separação. A implicação operacional é que a maioria
+dos aeroportos dos EUA tem perfis intermédios sem fronteiras nítidas.
+
+\subsubsection{Agglomerative Ward (\texttt{agglomerative}, $k=4$)}
+O clustering hierárquico aglomerativo usa a \textbf{ligação de Ward}: em cada
+passo, fundem-se os dois grupos cuja fusão minimiza o aumento total da variância
+intra-cluster (equivalente a minimizar a inércia do K-Means). Partindo de 306
+\textit{clusters} singulares e fundindo iterativamente, a classe
+\texttt{Clustering.agglomerative} calcula a matriz de ligação completa com
+\texttt{scipy.cluster.hierarchy.linkage(method=`ward')} e plota o
+\textbf{dendrograma truncado às últimas 30 fusões} para interpretabilidade.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{23_agglomerative_ward_dendrogram_airport_last_30_merges.png}
+    \caption{Dendrograma Ward (últimas 30 fusões, 306 aeroportos). A grande
+    distância de ligação entre os dois ramos principais ($\sim$37 unidades Ward)
+    confirma a separação nítida do grupo regional/lazer; a segunda grande cisão
+    ($\sim$30 unidades) separa médio porte de mega-hubs, correspondendo exactamente
+    à subdivisão do Cluster~2 do K-Means.}
+    \label{fig:dendrogram}
+\end{figure}
+
+Com $k=4$ escolhido após inspecção visual do dendrograma, os resultados são:
+Silhouette = 0.156, Davies-Bouldin = 1.595. O algoritmo hierárquico~\cite{ward}
+\textbf{reproduz exactamente} os Clusters 0 e 1 do K-Means e \textbf{subdivide
+o Cluster 2} nos dois sub-grupos que o K-Means fundia numa única categoria:
+\emph{grande-médio} ($\approx$90 aeroportos, 768 voos/aeroporto em média) e
+\emph{mega-hubs} ($\approx$31 aeroportos, 6.214 voos/aeroporto). A convergência
+entre K-Means e Agglomerative Ward — algoritmos com funções objectivo distintas
+(inércia vs variância aglomerativa) e sem partilha de estado — nas mesmas
+categorias operacionais é \textbf{evidência robusta de que estas categorias são
+intrínsecas aos dados} e não artefactos da escolha algorítmica.
+
+\begin{table}[h]
+\centering
+\caption{Comparação de Algoritmos de Clustering — Síntese}
+\label{tab:cluster_comparison}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccl}
+\toprule
+\textbf{Algoritmo} & \textbf{N. Clusters} & \textbf{Silhouette} & \textbf{D.-Bouldin} & \textbf{Diagnóstico} \\
+\midrule
+K-Means ($k=3$) & 3 & 0.208 & 1.501 & Partição ótima \\
+DBSCAN ($\varepsilon=1.5$) & 2 + 52\% ruído & 0.275$^*$ & — & Gradiente contínuo \\
+Agglomerative ($k=4$) & 4 & 0.156 & 1.595 & Confirma + subdivide \\
+\bottomrule
+\multicolumn{5}{l}{$^*$Silhouette calculado apenas nos pontos não-ruído.} \\
+\end{tabular}
+\end{table}
+
+% ===============================================================
+\section{Fase 5: Comparação e Avaliação de Modelos}
+
+\subsection{Metodologia de Comparação}
+Para que a comparação seja justa, todos os modelos são avaliados sobre o
+\textbf{mesmo conjunto de teste} de 50.000 voos, com os mesmos \textit{targets}
+triclasse derivados pela mesma função de categorização
+($<$15~min~$\to$~0;~15–30~$\to$~1;~$>$30~$\to$~2). As métricas primárias
+são o \textbf{Macro F1} — imune à dominância da classe maioritária — e o
+\textbf{F1 por classe}, que decompõe o desempenho nos três cenários operacionais
+distintos. A exatidão global é reportada para contexto mas não é usada como
+métrica de selecção. Os modelos de regressão são avaliados por \textbf{MAE} e
+\textbf{RMSE} (em minutos) e por $R^2$ (capacidade de superar o preditor trivial
+da média); dado o piso de ruído irredutível identificado, o MAE ponta-a-ponta é
+a métrica mais operacionalmente interpretável.
+
+\subsection{Tabela Comparativa Global — Classificação}
+
+\begin{table}[h]
+\centering
+\caption{Comparação Global — Todos os Modelos de Classificação (50k teste)}
+\label{tab:global}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{p{2.4cm}cccccc}
+\toprule
+\textbf{Modelo} & \textbf{Tipo} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+KNN ($k=5$, 5k)         & 3cl & 60\%   & 0.72 & 0.14 & 0.25 & 0.37 \\
+Árvore Decisão           & 3cl & 55\%   & 0.67 & 0.17 & 0.26 & 0.37 \\
+Reg. Logística           & 3cl & 57\%   & 0.70 & 0.15 & 0.23 & 0.36 \\
+RF Exp.~1 (original)    & 3cl & 63\%   & 0.76 & 0.21 & 0.10 & 0.35 \\
+HGB Exp.~1 (original)   & 3cl & 65\%   & 0.77 & 0.24 & 0.13 & 0.38 \\
+RF Exp.~2 (balanceado)  & 3cl & 49\%   & 0.58 & 0.23 & 0.28 & 0.36 \\
+HGB Exp.~2 (balanceado) & 3cl & 51\%   & 0.60 & 0.25 & 0.29 & 0.38 \\
+MLP Plano Exp.~1         & 3cl & 70.0\% & 0.84 & 0.25 & 0.17 & \textbf{0.42} \\
+MLP 2-Est. (composto)   & 3cl & 57.2\% & 0.72 & 0.00 & 0.34 & 0.36 \\
+MLP 3-Est. (Estágio 1)  & 3cl & 45.8\% & 0.62 & 0.17 & 0.20 & 0.33 \\
+\midrule
+\textbf{MLP 2-Est. Stage~1} & \textbf{2cl} & \textbf{68.1\%} & \multicolumn{3}{c}{(tarefa binária)} & \textbf{0.623} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tabela Comparativa Global — Regressão}
+
+\begin{table}[h]
+\centering
+\caption{Comparação Global — Modelos de Regressão (por subconjunto de avaliação)}
+\label{tab:global_reg}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.8cm}ccc}
+\toprule
+\textbf{Modelo / Âmbito de avaliação} & \textbf{RMSE} & \textbf{MAE} & \textbf{$R^2$} \\
+\midrule
+MLP plana (50k completo) & 303.52 & 36.40 & $-28.04$ \\
+MLP 2-Est. Stage~2 (subconj. atrasados) & 93.14 & 45.73 & $-0.009$ \\
+MLP 3-Est. Stage~2b (subconj. Long) & 124.75 & 62.23 & $-0.324$ \\
+\textbf{MLP 3-Est. Stage~2a (subconj. Short)} & \textbf{6.03} & \textbf{5.10} & $-0.754$ \\
+MLP 3-Est. E2E cascata (50k completo) & 58.72 & 26.09 & — \\
+\bottomrule
+\multicolumn{4}{l}{\small Regressores avaliados no subconjunto verdadeiro correspondente à sua especialização.}\\
+\end{tabular}
+\end{table}
+
+\subsection{Análise Multi-Dimensional dos Resultados}
+
+\paragraph{Dimensão 1 — Efeito da capacidade do modelo.}
+A progressão KNN~$\to$~Supervisado~$\to$~Ensemble~$\to$~MLP em Macro F1
+(0.37~$\to$~0.37~$\to$~0.38~$\to$~0.42) é positiva mas modesta. Nenhum modelo,
+independentemente da sua capacidade, consegue Macro F1 acima de 0.42 na
+formulação triclasse — o que indica que o \textbf{piso de ruído} das
+\textit{features} pré-partida está perto de 0.40 Macro F1 para esta tarefa.
+Mais capacidade computacional não resolve um problema de informação.
+
+\paragraph{Dimensão 2 — Efeito do balanceamento.}
+A comparação Ensemble Exp.~1 vs Exp.~2 quantifica o \textit{trade-off}
+precisamente: o balanceamento triclasse ganha $+$0.15–0.17 no F1 de \textit{Long}
+mas perde $-$14 p.p. na exatidão global. O Macro F1 mantém-se estável
+($\pm$0.01), confirmando que é a métrica certa para capturar este
+\textit{trade-off} sem viés.
+
+\paragraph{Dimensão 3 — Arquitectura plana vs hierárquica.}
+O MLP plano triclasse (Macro F1~=~0.42) supera o Estágio 1 do modelo de 3
+estágios (Macro F1~=~0.33). Paradoxalmente, a formulação \emph{hierárquica}
+piora a classificação triclasse: o Estágio 1 do modelo de 3 estágios tem uma
+tarefa mais difícil (triclasse com desequilíbrio 73/10/17) e recebe sinal de
+paragem pelo Macro F1 triclasse, que é um objectivo mais ruidoso do que o
+Macro F1 binário. A formulação hierárquica \emph{ganha} na regressão (MAE
+ponta-a-ponta 26 min vs 36 min plana) e na questão binária (Macro F1~=~0.623).
+
+\paragraph{Dimensão 4 — A classe \textit{Short} como diagnóstico transversal.}
+O F1 de \textit{Short delay} é o mais baixo em todos os modelos, variando entre
+0.00 e 0.25. A janela de 15 min (15–30) é intrinsecamente estreita: o MAE
+irredutível da regressão ($\approx$26 min) é \textbf{mais largo do que a
+janela inteira}. Isto explica mecanicamente por que a classificação de
+\textit{Short} é impossível ao nível de precisão operacional: qualquer modelo que
+preveja ``vai atrasar'' erra sistematicamente na magnitude, distribuindo erros
+entre \textit{Short} e \textit{Long}.
+
+\subsection{Forças e Fraquezas por Família de Modelos}
+
+\paragraph{KNN} Força: sem parâmetros de treino, interpretável, evidência da
+eficácia da escalonagem. Fraqueza: $O(N \cdot d)$ por inferência — inviável em
+produção nesta escala sem KD-Tree ou Ball-Tree. Serve exclusivamente como
+\textit{baseline} e prova de conceito.
+
+\paragraph{Árvore de Decisão / Regressão Logística} Força: interpretáveis e
+auditáveis (a árvore produz regras de decisão explícitas). Fraqueza: a Árvore
+sem profundidade limitada sobre-ajusta; a Regressão Logística é limitada a
+fronteiras lineares num problema intrinsecamente não-linear. Ambos ficam abaixo
+do HGB em Macro F1.
+
+\paragraph{Random Forest / HistGradientBoosting} Força: robustos e escaláveis;
+o HGB é o melhor modelo sklearn com Macro F1 estável em ambos os regimes de
+balanceamento. O RF é paralelizável. Fraqueza: o treino sequencial do HGB limita
+a paralelização; ambos são caixas negras face à Árvore.
+
+\paragraph{MLP Plano} Melhor classificador triclasse (Macro F1~=~0.42). O
+\texttt{MacroF1Monitor} é a contribuição técnica central — sem ele o modelo
+colapsa para o preditor maioritário. Fraqueza: sensível a hiperparâmetros e
+requer GPU para treino em larga escala; três épocas de convergência variam
+entre execuções.
+
+\paragraph{MLP Hierárquico 2 Estágios} Melhor classificador \emph{binário}
+do projecto (Macro F1~=~0.623). A questão \textit{«vai atrasar?»} é a mais
+accionável e a que tem mais sinal nas \textit{features} pré-partida. O composto
+triclasse (Macro F1~=~0.36) é inferior ao MLP plano porque o \textit{binning}
+da saída do regressor é impreciso — a fronteira de 30 min não corresponde à
+distribuição real dos dados.
+
+\paragraph{MLP Hierárquico 3 Estágios} Melhor MAE de ponta a ponta (26.09 min)
+e melhor RMSE no subconjunto Short (6.03 min). Desvantagem: o erro composto de
+encaminhamento afecta o MAE ponta-a-ponta; mantém três modelos independentes
+em produção.
+
+\subsection{Limitação Fundamental: Piso de Ruído Irredutível}
+O resultado negativo mais informativo do projecto é a negatividade universal de
+$R^2$ em todos os cenários de regressão. Mesmo o Stage~2a (intervalo alvo de
+apenas 15 min, $R^2 = -0.754$) e o Stage~2 do modelo de 2 estágios (treinado
+\emph{exclusivamente} em voos atrasados, $R^2 = -0.009$) são incapazes de superar
+o preditor da média. Isto constitui \textbf{prova empírica} de que a variância do
+atraso ao minuto é dominada por variáveis ausentes do dataset:
+\begin{itemize}
+\item \textbf{Meteorologia em tempo real:} visibilidade, vento, precipitação na
+      janela de partida/chegada — ausente do dataset mas responsável por $>$50\%
+      dos atrasos de longa duração.
+\item \textbf{Atrasos em cascata por aeronave:} o histórico do avião nas horas
+      anteriores (número de cauda, atraso acumulado) — não incluído nas
+      \textit{features} pré-partida.
+\item \textbf{Congestionamento ATC:} capacidade do espaço aéreo e atrasos na
+      torre de controlo — dinâmico ao minuto e ausente do dataset.
+\end{itemize}
+O MAE irredutível de $\approx$26 min é mais largo do que toda a banda
+\textit{Short delay} (15 min), o que explica mecanicamente o baixo F1 desta
+classe em todos os modelos e motiva a priorização da classificação binária como
+produto operacional principal.
+
+% ===============================================================
+\section{Fase 6: Operacionalização}
+
+\subsection{Seleção do Modelo para Produção}
+A Fase 5 produziu resultados complementares que justificam diferentes modelos
+para diferentes casos de uso operacional. A Tabela~\ref{tab:prod_rec} resume as
+recomendações com os requisitos de cada cenário.
+
+\begin{table}[h]
+\centering
+\caption{Recomendações por caso de uso operacional}
+\label{tab:prod_rec}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.0cm}p{2.0cm}p{1.4cm}p{1.5cm}}
+\toprule
+\textbf{Caso de uso} & \textbf{Modelo} & \textbf{Macro F1} & \textbf{MAE} \\
+\midrule
+Alerta binário (vai atrasar?) & MLP 2-Est. Estágio 1 & 0.623 & — \\
+Triclasse (severidade) & MLP Plano Exp.~1 & 0.42 & — \\
+Minutos esperados & MLP 3-Est. E2E & — & 26 min \\
+Subconjunto Short & MLP 3-Est. Estágio 2a & — & 5.1 min \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O \textbf{produto operacional primário} é o \textbf{Estágio 1 binário}
+(Macro F1~=~0.623, exatidão 68.1\%): a questão \textit{«vai atrasar?»} tem o
+maior sinal nas \textit{features} pré-partida e é a mais acionável para as
+decisões de negócio (alocação de portões, alertas proativos a passageiros,
+reforço de tripulação). O utilizador final recebe um sinal claro de risco
+sem a ambiguidade da granularidade triclasse.
+
+Para granularidade triclasse (e.g.\ priorização de portões por severidade),
+o \textbf{MLP Plano Exp.~1} (Macro F1~=~0.42) é preferível ao composto do
+modelo de 2 estágios (Macro F1~=~0.36) porque não depende da qualidade do
+regressor de minutos. Quando a estimativa quantitativa de atraso é necessária
+(e.g.\ planeamento de conexões), o \textbf{modelo de 3 estágios} é o único com
+MAE abaixo de 30 min (26.09 min ponta-a-ponta). Em qualquer cenário, o
+utilizador deve ser informado do limite fundamental: a previsão ao minuto tem
+erro médio de $\approx$26 min independentemente do modelo.
+
+\subsection{Plano de \textit{Deployment} e Arquitectura de Produção}
+
+\begin{enumerate}
+\item \textbf{Serialização dos artefactos de modelo.}
+  Os três Estágios do modelo de 3 estágios são serializados separadamente
+  em formato \texttt{.keras} (TensorFlow SavedModel). Os transformadores de
+  pré-processamento (\textit{LabelEncoder}, \textit{StandardScaler},
+  \textit{MinMaxScaler} e o mapa \texttt{hourly\_delay\_map}) são serializados
+  em \texttt{.pkl} via \texttt{joblib}. Todos os artefactos devem ser
+  versionados em conjunto no repositório GitHub com \textit{tags} semânticas
+  (\texttt{model-v1.0.0}) para rastreabilidade.
+
+\item \textbf{Serviço de inferência via API REST.}
+  A \textit{pipeline} é exposta como endpoint REST com FastAPI. O
+  \textit{input} de cada pedido é um objecto JSON com as \textit{features}
+  pré-partida: companhia aérea, aeroporto de origem e destino, horário
+  planeado de partida e chegada, distância e data. O serviço aplica toda
+  a \textit{pipeline} de engenharia e pré-processamento (inclusive o
+  \texttt{AVG\_DELAY\_PER\_HOUR}) e devolve a probabilidade de atraso,
+  a classe predita e, opcionalmente, a estimativa de minutos. A separação
+  do serviço de inferência do serviço de treino garante que actualizações
+  de modelo não interrompem o serviço em produção.
+
+\item \textbf{Re-aplicação rigorosa do pré-processamento.}
+  Os \textit{LabelEncoders} e \textit{Scalers} ajustados no treino devem ser
+  carregados e aplicados \textbf{exactamente} a cada pedido de inferência —
+  nunca re-ajustados em produção sobre novos dados, o que alteraria o espaço
+  de \textit{features} e invalidaria os pesos do modelo. O
+  \texttt{AVG\_DELAY\_PER\_HOUR} é o único componente que deve ser
+  recalculado periodicamente (e.g.\ mensalmente) sobre dados recentes para
+  capturar \textit{drift} nos padrões horários de atraso.
+
+\item \textbf{Re-treino periódico.}
+  Re-treino trimestral com dados recentes do \textit{On-Time Performance
+  Reporting System} do DOT, mantendo o mesmo protocolo de \textit{pipeline}
+  (divisão 80/20, mesmos parâmetros). A re-validação pré-deploy deve comparar
+  o Macro F1 do novo modelo com o do modelo em produção; apenas deploy se
+  houver ganho de $\geq$0.01 Macro F1 ou redução de $\geq$1 min MAE.
+
+\item \textbf{Monitorização em produção.}
+  Monitorizar três tipos de sinal: \emph{(i)} \textit{drift} nas distribuições
+  das \textit{features} de entrada (novas rotas, novas companhias, mudanças
+  sazonais); \emph{(ii)} degradação do Macro F1 em dados de produção rotulados
+  a posteriori (quando os voos aterram, o \texttt{ARR\_DELAY} real fica
+  disponível); \emph{(iii)} \textit{concept drift} nos padrões operacionais
+  (e.g.\ novas politicas da FAA, efeitos pós-pandemia).
+\end{enumerate}
+
+\subsection{Melhorias Futuras}
+
+\paragraph{Features do dia-de — impacto máximo esperado.}
+A Fase 5 demonstrou que a variância residual é dominada por eventos do dia
+ausentes do dataset. As três \textit{features} com maior potencial de redução
+do piso de ruído são:
+\emph{(i)} previsão meteorológica na janela de partida/chegada (visibilidade,
+precipitação, vento cruzado) — responsável por $>$50\% dos atrasos de longa
+duração;
+\emph{(ii)} histórico recente da aeronave (número de cauda) — captura atrasos
+em cascata que o modelo não consegue prever sem saber de onde vem o avião;
+\emph{(iii)} capacidade do espaço aéreo prevista (\textit{NAS delay forecast}).
+Juntas, estas \textit{features} poderiam elevar o $R^2$ da regressão para
+território positivo.
+
+\paragraph{Enriquecimento com \textit{clustering}.}
+O perfil de cluster do aeroporto de origem (regional/lazer, médio, hub,
+mega-hub) identificado na Fase 4 é uma \textit{feature} categórica pronta a
+incorporar nos modelos preditivos. O Cluster 0 (regional/lazer), com
+$\sigma = 117$ min, sinaliza uma variabilidade operacional muito superior aos
+restantes e poderia melhorar as previsões para esse sub-segmento.
+
+\paragraph{Modelos especializados por contexto.}
+Treinar modelos separados por companhia aérea ou por corredor de tráfego
+(e.g.\ costa-a-costa vs regional) permitiria capturar padrões operacionais
+idiossincráticos. O modelo global não consegue aprender, por exemplo, que a
+Southwest tem padrões de pontualidade sistematicamente diferentes da Delta nos
+mesmos corredores.
+
+\paragraph{Escalabilidade do KNN.}
+Substituir a pesquisa exaustiva por KD-Tree (\texttt{sklearn.neighbors.KDTree})
+ou Ball-Tree reduziria a complexidade de inferência de $O(N \cdot d)$ para
+$O(\log N \cdot d)$, permitindo avaliação no conjunto de teste completo de
+50.000 pontos e comparação directa com os restantes modelos.
+
+\paragraph{Otimização do \textit{threshold} do Estágio 1.}
+O threshold de 0.5 usado no Estágio 1 binário foi fixo. Uma curva ROC com
+validação cruzada poderia encontrar o threshold ótimo para diferentes funções
+de custo operacional — por exemplo, um threshold mais baixo prioriza
+identificar todos os atrasos reais (maior \textit{recall}) a custo de mais
+falsos positivos.
+
+% ===============================================================
+\section{Conclusão}
+Este projeto percorreu o ciclo de vida completo de Data Science — da preparação
+e validação estatística dos dados (Fases 1–3) à construção, avaliação e
+operacionalização de modelos (Fases 4–6) — aplicado à previsão de atrasos de
+voos comerciais domésticos nos EUA.
+
+A \textbf{fase de preparação} provou ser o pilar do projeto: a engenharia de 12
+\textit{features} contextuais, com destaque para o \textit{target encoding}
+horário, foi validada não só pela separação visual no UMAP mas, de forma
+rigorosa, pelos testes de hipóteses ($p<0{,}0001$ em todas as variáveis). A
+falha do PCA contrastada com o sucesso do UMAP confirmou que o dataset é
+altamente estruturado mas estritamente não-linear, antecipando o desempenho dos
+modelos baseados em árvores e redes neuronais.
+
+O \textbf{melhor classificador} é o Estágio 1 binário do MLP hierárquico de 2
+estágios (Macro F1~=~0.623), com um \textit{design} operacionalmente motivado.
+O \textbf{melhor resultado de regressão} é o MAE~=~5.10 min do Estágio 2a do
+modelo de 3 estágios no subconjunto \textit{Short delay} — um ganho de
+$9\times$ face ao regressor único.
+
+O \textbf{resultado negativo} mais relevante é igualmente preciso: a previsão
+ao minuto de \texttt{ARR\_DELAY} é fundamentalmente impraticável com as
+\textit{features} pré-partida ($R^2 < 0$ em todos os cenários). O MAE
+irredutível de $\approx$26 min quantifica o piso de ruído imposto pelos eventos
+do dia ausentes do dataset e motiva a priorização da formulação como
+classificação, e do Estágio 1 binário como produto operacional.
+
+Por fim, o diagnóstico e correção do \textit{bug} estrutural
+\texttt{class\_weight} $\times$ \texttt{EarlyStopping} — com o
+\texttt{MacroF1Monitor} como solução mínima e suficiente — constitui uma
+contribuição técnica diretamente aplicável a qualquer problema de classificação
+multiclasse desequilibrada em Keras. A fase de \textit{clustering} identificou
+três categorias operacionais intrínsecas aos dados (regional/lazer,
+mainstream-médio, grandes hubs), convergentemente detetadas por K-Means e
+Agglomerative Ward.
+
+% ===============================================================
+\begin{thebibliography}{00}
+
+\bibitem{dataset}
+U.S. Department of Transportation, ``Flight Delay and Cancellation Dataset
+(2019–2023),'' Kaggle. [Online]. Disponível:
+\url{https://www.kaggle.com/datasets/patrickzel/flight-delay-and-cancellation-dataset-2019-2023/data}
+
+\bibitem{tensorflow}
+M.~Abadi \textit{et al.}, ``TensorFlow: Large-Scale Machine Learning on
+Heterogeneous Systems,'' 2015. [Online]. Disponível: \url{https://www.tensorflow.org}
+
+\bibitem{sklearn}
+F.~Pedregosa \textit{et al.}, ``Scikit-learn: Machine Learning in Python,''
+\textit{Journal of Machine Learning Research}, vol.~12, pp.~2825--2830, 2011.
+
+\bibitem{breiman}
+L.~Breiman, ``Random Forests,'' \textit{Machine Learning}, vol.~45, pp.~5--32, 2001.
+
+\bibitem{friedman}
+J.~H.~Friedman, ``Greedy Function Approximation: A Gradient Boosting Machine,''
+\textit{Annals of Statistics}, vol.~29, no.~5, pp.~1189--1232, 2001.
+
+\bibitem{kmeans}
+J.~MacQueen, ``Some Methods for Classification and Analysis of Multivariate
+Observations,'' \textit{Proc.\ 5th Berkeley Symp.\ on Mathematical Statistics
+and Probability}, vol.~1, pp.~281--297, 1967.
+
+\bibitem{dbscan}
+M.~Ester, H.-P.~Kriegel, J.~Sander e X.~Xu, ``A Density-Based Algorithm for
+Discovering Clusters in Large Spatial Databases with Noise,''
+\textit{Proc.\ KDD}, pp.~226--231, 1996.
+
+\bibitem{ward}
+J.~H.~Ward, ``Hierarchical Grouping to Optimize an Objective Function,''
+\textit{Journal of the American Statistical Association}, vol.~58, no.~301,
+pp.~236--244, 1963.
+
+\bibitem{cover}
+T.~Cover e P.~Hart, ``Nearest Neighbor Pattern Classification,''
+\textit{IEEE Transactions on Information Theory}, vol.~13, no.~1,
+pp.~21--27, 1967.
+
+\end{thebibliography}
+
+\end{document}

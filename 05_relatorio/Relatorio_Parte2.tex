@@ -1,0 +1,829 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{caption}
+\usepackage{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  frame=single,
+  language=Python,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape\color{gray},
+  showstringspaces=false
+}
+
+\graphicspath{{./}}
+
+\begin{document}
+
+\title{Previsão de Atrasos em Voos Comerciais:\\Relatório Final — Fases 4, 5 e 6}
+
+\author{
+\IEEEauthorblockN{Francisco Palmeira 2109923}
+\IEEEauthorblockA{\textit{Universidade da Madeira}\\
+\textit{Engenharia Informática}\\
+Funchal, Portugal\\
+2109923@student.uma.pt}
+\and
+\IEEEauthorblockN{Omar Jesus 2099223}
+\IEEEauthorblockA{\textit{Universidade da Madeira}\\
+\textit{Engenharia Informática}\\
+Funchal, Portugal\\
+2099223@student.uma.pt}
+}
+
+\maketitle
+
+% ---------------------------------------------------------------
+\begin{abstract}
+Este relatório apresenta as Fases 4, 5 e 6 do ciclo de vida de análise de dados
+aplicadas ao \textit{Flight Delay and Cancellation Dataset (2019–2023)}. O problema é
+formulado como classificação triclasse — \textit{On-time} ($<$15 min), \textit{Short
+delay} (15–30 min), \textit{Long delay} ($>$30 min) — e como regressão sobre os
+minutos de atraso à chegada. São construídas seis famílias de modelos: KNN
+implementado de raiz em NumPy, aprendizagem supervisionada clássica (Árvore de
+Decisão e Regressão Logística), dois ensembles (Random Forest e HistGradientBoosting),
+quatro variantes MLP em TensorFlow/Keras e agrupamento de aeroportos com K-Means,
+DBSCAN e Agglomerative Ward. O projeto diagnostica um bug estrutural na interação
+\texttt{class\_weight} $\times$ \texttt{EarlyStopping(val\_loss)} do Keras e propõe um
+callback personalizado (\texttt{MacroF1Monitor}) como correção mínima e suficiente.
+É introduzido um modelo hierárquico de três estágios — classificador triclasse seguido
+de dois regressores especializados — que reduz o MAE de ponta a ponta para 26,09 min
+e o RMSE do subconjunto \textit{Short delay} para apenas 6,03 min. Demonstra-se que
+a previsão ao minuto com features pré-partida é fundamentalmente limitada, com o
+melhor $R^2 \approx -0{,}008$ mesmo na configuração hierárquica.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Classificação Multiclasse, KNN, Árvore de Decisão, Regressão Logística,
+Random Forest, Gradient Boosting, MLP, Deep Learning, Clustering,
+K-Means, DBSCAN, Agglomerative Ward, Hierárquico
+\end{IEEEkeywords}
+
+% ---------------------------------------------------------------
+\section{Introdução}
+
+O dataset \textit{Flight Delay and Cancellation (2019–2023)} do Departamento de
+Transportes dos EUA~\cite{dataset} contém milhões de registos de voos domésticos
+comerciais. A Fase 1 estabeleceu uma \textit{pipeline} completa de preparação de
+dados: remoção das colunas com \textit{data leakage} pós-evento (DEP\_DELAY,
+ARR\_TIME, TAXI\_OUT, etc.), engenharia de \textbf{13 novas features} (temporais,
+geográficas e \textit{target encoding} de hora de partida), análise exploratória com
+PCA e UMAP, testes de hipóteses (Kruskal-Wallis e t-test) e seleção de modelos.
+
+O conjunto de treino final contém \textbf{200.000 voos} e o de teste \textbf{50.000
+voos}, com proporção equilibrada de 50\% pontuais / 50\% atrasados por
+\textit{undersampling}. Todas as features numéricas foram padronizadas com
+\textit{StandardScaler}; as categóricas foram codificadas com \textit{LabelEncoder}
+e normalizadas com \textit{MinMaxScaler}.
+
+As features utilizadas nos modelos são exclusivamente pré-partida: \texttt{CRS\_DEP\_TIME},
+\texttt{CRS\_ARR\_TIME}, \texttt{CRS\_ELAPSED\_TIME}, \texttt{DISTANCE},
+\texttt{AIRLINE\_CODE}, \texttt{ORIGIN}, \texttt{DEST}, e as 13 features derivadas.
+
+% ---------------------------------------------------------------
+\section{Fase 4: Construção de Modelos}
+
+\subsection{K-Nearest Neighbors — Implementação de Raiz}
+
+O algoritmo KNN foi implementado \textit{from scratch} em Python com exclusivamente
+arrays NumPy, sem bibliotecas de ML. Para cada ponto de teste $\mathbf{x}$, a
+distância Euclidiana é calculada de forma vetorizada contra todo o conjunto de treino:
+
+\begin{equation}
+d(\mathbf{x}, \mathbf{x}_i) = \left\|\mathbf{x} - \mathbf{x}_i\right\|_2
+= \sqrt{\sum_{j=1}^{d}(x_j - x_{i,j})^2}
+\end{equation}
+
+Os $k$ vizinhos mais próximos são identificados via \texttt{np.argsort} e a classe é
+atribuída por votação maioritária:
+
+\begin{equation}
+\hat{y} = \underset{c}{\arg\max} \sum_{i \in \mathcal{N}_k(\mathbf{x})} \mathbf{1}[y_i = c]
+\end{equation}
+
+\textbf{Configuração e Resultados.} O modelo foi treinado com $k = 5$ nas 24 features
+pré-processadas. A avaliação foi realizada numa sub-amostra de \textbf{5.000 exemplos}
+de teste, imposta pela complexidade $O(N \cdot d)$ da pesquisa por força bruta.
+
+\begin{table}[h]
+\centering
+\caption{KNN — Desempenho ($k=5$, $n_{\text{test}}=5\,000$)}
+\label{tab:knn}
+\begin{tabular}{lc}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Acurácia       & $\approx 60\%$ \\
+F1 On-time     & $\approx 0.72$ \\
+F1 Short delay & $\approx 0.14$ \\
+F1 Long delay  & $\approx 0.25$ \\
+Macro F1       & $\approx 0.37$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O KNN serve como \textit{baseline} não-paramétrico. O principal constrangimento é a
+escalabilidade: com $N = 200\,000$ e $d = 24$, o custo de inferência inviabiliza a
+avaliação do conjunto completo sem estruturas auxiliares (KD-Tree, Ball-Tree). Os
+resultados confirmam que a distância Euclidiana no espaço de features captura sinal
+relevante, mas a granularidade de 5.000 pontos de teste limita a robustez das estimativas.
+
+% ---
+\subsection{Aprendizagem Supervisionada Clássica}
+
+Foram testados dois modelos sklearn na pipeline de pré-processamento não escalonado
+(apenas features numéricas do \texttt{DataLoader}, $n_{\text{treino}} = 100\,000$),
+ambos com \texttt{class\_weight=`balanced'} para lidar com o desequilíbrio.
+
+\subsubsection{Árvore de Decisão}
+
+A \textit{Decision Tree} particiona o espaço de features por limiares binários
+recursivos, maximizando a impureza de Gini em cada nó. A sua capacidade de capturar
+interações não-lineares sem transformações adicionais torna-a adequada como modelo
+interpretável. Configuração: \texttt{random\_state=42}, \texttt{class\_weight=`balanced'}.
+
+\subsubsection{Regressão Logística}
+
+A Regressão Logística estima probabilidades de classe via função softmax sobre uma
+combinação linear das features. É o modelo linear de referência para classificação
+multiclasse. Configuração: \texttt{max\_iter=3000}, \texttt{class\_weight=`balanced'},
+\texttt{n\_jobs=-1}.
+
+\begin{table}[h]
+\centering
+\caption{Modelos Supervisionados — Resultados ($n_{\text{treino}}=100\,000$)}
+\label{tab:supervised}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Modelo} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+Árvore de Decisão   & $\approx 55\%$ & $\approx 0.67$ & $\approx 0.17$ & $\approx 0.26$ & $\approx 0.37$ \\
+Reg. Logística      & $\approx 57\%$ & $\approx 0.70$ & $\approx 0.15$ & $\approx 0.23$ & $\approx 0.36$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{01_confusion_matrix_decision_tree.png}
+    \caption{Matrizes de confusão — Árvore de Decisão (esq.) e Regressão Logística (dir.). Ambos os modelos concentram os erros na classe \textit{Short delay}, que é consistentemente confundida com \textit{On-time}.}
+    \label{fig:cm_supervised}
+\end{figure}
+
+Ambos os modelos confirmam o padrão central do dataset: o F1 da classe \textit{Short
+delay} é consistentemente o mais baixo — a janela de 15 min (15–30) é mais estreita
+do que o ruído de previsão. A Regressão Logística supera marginalmente a Árvore de
+Decisão em acurácia por ser robusta à variância das partições nos nós foliares.
+
+% ---
+\subsection{Modelos de Ensemble}
+
+Foram treinados dois modelos de ensemble sobre \textbf{200.000 exemplos de treino} e
+avaliados em \textbf{50.000 de teste}, em dois cenários: distribuição original
+(Exp.~1) e \textit{undersampling} balanceado (Exp.~2).
+
+\subsubsection{Random Forest — Bagging}
+
+O \textit{Random Forest}~\cite{breiman} é um ensemble de árvores de decisão treinadas
+por \textit{bootstrap aggregation}. Cada árvore vê uma amostra com reposição e um
+subconjunto aleatório de features em cada nó, reduzindo a variância por média das
+predições individuais. Configuração: \texttt{n\_estimators=100}, \texttt{max\_depth=20},
+\texttt{class\_weight=`balanced'}, \texttt{n\_jobs=-1}.
+
+\subsubsection{HistGradientBoosting — Boosting}
+
+O \textit{HistGradientBoostingClassifier}~\cite{friedman} treina árvores
+sequencialmente, cada uma ajustando os resíduos da anterior. A variante baseada em
+histogramas agrupa os valores contínuos em \textit{bins}, sendo $5$–$10\times$ mais
+rápida que o GBM clássico. Configuração: \texttt{max\_iter=100},
+\texttt{learning\_rate=0.1}, \texttt{class\_weight=`balanced'}.
+
+\begin{table}[h]
+\centering
+\caption{Ensemble — Resultados Comparativos}
+\label{tab:ensemble}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{llccccc}
+\toprule
+\textbf{Exp.} & \textbf{Modelo} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+\multirow{2}{*}{1} & RF  & $\approx63\%$ & $\approx0.76$ & $\approx0.21$ & $\approx0.10$ & $\approx0.35$ \\
+                   & HGB & $\approx65\%$ & $\approx0.77$ & $\approx0.24$ & $\approx0.13$ & $\approx0.38$ \\
+\midrule
+\multirow{2}{*}{2} & RF  & $\approx49\%$ & $\approx0.58$ & $\approx0.23$ & $\approx0.28$ & $\approx0.36$ \\
+                   & HGB & $\approx51\%$ & $\approx0.60$ & $\approx0.25$ & $\approx0.29$ & $\approx0.38$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Os modelos baseados em árvores confirmam a natureza não-linear do problema. O HGB
+supera o RF em acurácia, beneficiando do ajuste sequencial aos resíduos. O
+\textit{undersampling} (Exp.~2) melhora o F1 de \textit{Long delay} à custa da
+acurácia global, revelando o trade-off fundamental entre sensibilidade às classes
+minoritárias e precisão global.
+
+% ---
+\subsection{Aprendizagem Profunda (Deep Learning)}
+
+\subsubsection{Arquitetura MLP}
+
+O dataset é estritamente tabular: cada linha é um voo independente descrito por um
+vetor de comprimento fixo, sem estrutura espacial (CNN) nem sequência temporal por
+amostra (RNN/LSTM). As features temporais já estão engenheiradas como atributos
+estáticos. O \textit{Multi-Layer Perceptron} (MLP) é a arquitetura canónica de Deep
+Learning para dados tabulares~\cite{tensorflow}.
+
+\begin{table}[h]
+\centering
+\caption{Arquitetura MLP — Camada por Camada}
+\label{tab:mlp_arch}
+\begin{tabular}{lll}
+\toprule
+\textbf{Camada} & \textbf{Configuração} & \textbf{Papel} \\
+\midrule
+Dense 128 & ReLU + BatchNorm + Dropout(0.3) & Representação primária \\
+Dense 64  & ReLU + BatchNorm + Dropout(0.3) & Compressão \\
+Dense 32  & ReLU + BatchNorm + Dropout(0.2) & Abstração final \\
+Dense 3   & Softmax                          & Classificação 3 classes \\
+\midrule
+\multicolumn{3}{l}{\textit{Regressão:} Dense 1 (linear) em lugar do Dense 3.} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Otimizador: Adam ($\text{lr}=10^{-3}$). Regularização:
+\texttt{ReduceLROnPlateau}~(fator~$0.5$, paciência 5). Treino: 80 épocas máx.,
+\textit{batch size}~512, paciência 10. A inicialização do \textit{bias} de saída
+com $\log(\text{priors})$ dá à rede um ponto de partida que já corresponde à
+distribuição marginal das classes, evitando que o otimizador desperdice as primeiras
+épocas a aprender os priors.
+
+\subsubsection{Bug Estrutural: Colapso para Preditor Maioritário}
+
+O primeiro treino produziu 73\% de acurácia com \textit{recall}~1.00~/~0.00~/~0.00
+— o modelo prediz \textit{On-time} para \textbf{todos} os voos. Este é um
+\textbf{preditor degenerado}. A causa raiz é a interação entre
+\texttt{class\_weight} e \texttt{EarlyStopping(monitor=`val\_loss')}:
+
+\begin{enumerate}
+\item \texttt{class\_weight=`balanced'} re-pondera apenas a \textit{loss de treino}.
+\item A \textit{val\_loss} é calculada \textbf{sem ponderação}. Com distribuição
+      73/10/17, a \textit{cross-entropy} não ponderada é minimizada pelo preditor
+      constante-maioritário.
+\item As épocas iniciais, onde a saída \textit{softmax} se aproxima dos priors
+      (graças à inicialização de bias), produzem a \textbf{menor \textit{val\_loss}}
+      de toda a execução.
+\item \texttt{restore\_best\_weights=True} reverte o modelo a esse estado degenerado
+      inicial, descartando todo o progresso intermédio.
+\end{enumerate}
+
+\subsubsection{Correção: Callback \texttt{MacroF1Monitor}}
+
+A solução substitui o \texttt{EarlyStopping(val\_loss)} por um callback personalizado
+que monitoriza o \textbf{Macro F1 de validação} — imune ao colapso maioritário (um
+preditor constante obtém $\approx 0.28$, não o máximo):
+
+\begin{lstlisting}[caption=MacroF1Monitor (DeepLearning.py)]
+class MacroF1Monitor(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        preds = self.model.predict(
+            self.X_val, verbose=0).argmax(axis=1)
+        macro_f1 = f1_score(self.y_val, preds,
+            average='macro', zero_division=0)
+        if macro_f1 > self.best_f1 + 1e-4:
+            self.best_f1 = macro_f1
+            self.best_weights = self.model.get_weights()
+            self.wait = 0
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.model.stop_training = True
+    def on_train_end(self, logs=None):
+        self.model.set_weights(self.best_weights)
+\end{lstlisting}
+
+Esta única alteração fez o Macro F1 passar de 0.28 (degenerado) para \textbf{0.42},
+sem alterar arquitetura, otimizador ou pesos de classe.
+
+\subsubsection{MLP Plano — Classificação (Exp.~1)}
+
+Treinado nos 200k exemplos com \texttt{class\_weight=`balanced'} e
+\texttt{MacroF1Monitor}. É o modelo de referência para as variantes hierárquicas.
+
+\begin{table}[h]
+\centering
+\caption{MLP Plano (Exp.~1) — Classificação}
+\label{tab:mlp_flat}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Exp.} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+Exp.~1 (MacroF1Mon.)  & 70.0\% & 0.84 & 0.25 & 0.17 & \textbf{0.42} \\
+Exp.~1b (stress-test) & 73.0\% & 0.84 & 0.00 & 0.00 & 0.28$^{\dagger}$ \\
+Exp.~2 (balanceado)   & 26.5\% & 0.37 & 0.19 & 0.05 & 0.21 \\
+\bottomrule
+\multicolumn{6}{l}{$^{\dagger}$Colapso maioritário — recall 1.00 / 0.00 / 0.00.} \\
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{07_loss_curve.png}
+    \caption{MLP Exp.~1 — curva de loss (esq.) e Macro F1 de validação (dir.) ao longo das épocas. A instabilidade da \textit{val\_loss} confirma que não pode ser usada como critério de paragem; o \texttt{MacroF1Monitor} termina quando o Macro F1 de validação deixa de melhorar.}
+    \label{fig:mlp_history}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\columnwidth]{08_confusion_matrix_mlp_deep_learning.png}
+    \caption{Matriz de confusão — MLP Plano (Exp.~1, \texttt{MacroF1Monitor}). A maioria dos voos \textit{Short} e \textit{Long} é classificada como \textit{On-time}, refletindo o piso de ruído irreducível das features pré-partida.}
+    \label{fig:cm_mlp}
+\end{figure}
+
+A Exp.~1b foi um stress-test de sobre-correção (sem BatchNorm, pesos manuais
+$\{1, 5, 2.5\}$) que re-colapsou: as três modificações empurram a otimização na
+mesma direção e destabilizam o treino. Confirmou-se que o
+\texttt{MacroF1Monitor} é a intervenção \textbf{necessária e suficiente}. A
+Exp.~2 (undersampling) reduz o conjunto de treino em $\approx 3\times$,
+produzindo convergência prematura e Macro F1~=~0.21.
+
+\subsubsection{MLP de Regressão Plana (Exp.~3)}
+
+O mesmo backbone com saída linear foi treinado para prever ARR\_DELAY em minutos
+sobre o conjunto completo. O resultado é R$^2 = -28.04$ — dramaticamente pior do que
+um preditor de média. A causa é estrutural: $\approx 73\%$ dos exemplos têm
+ARR\_DELAY perto de zero, levando o MSE a ser minimizado por prever zero para todos.
+A variância residual é dominada por eventos do dia ausentes do dataset (meteorologia,
+atrasos em cascata por aeronave, congestionamento ATC).
+
+\subsubsection{MLP Hierárquico de 2 Estágios (Exp.~4)}
+
+Para isolar o problema binário (vai atrasar?) do problema de magnitude (quanto?),
+o modelo foi decomposto numa cascata:
+
+\begin{itemize}
+\item \textbf{Estágio 1 (binário):} Classificador \textit{On-time} vs
+      \textit{Delayed} ($\geq$15 min), treinado nos 200k exemplos com
+      \texttt{class\_weight=`balanced'} + \texttt{MacroF1Monitor}.
+\item \textbf{Estágio 2 (regressão):} Prevê ARR\_DELAY em minutos, treinado apenas
+      nos $\approx$100k voos atrasados do conjunto de treino.
+\item \textbf{Inferência:} Se o Estágio 1 prediz \textit{Delayed}, o Estágio 2
+      fornece a previsão em minutos; caso contrário, prediz 0 min.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Hierárquico 2-Estágios — Estágio 1 Binário}
+\label{tab:stage1_binary}
+\begin{tabular}{lc}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Acurácia binária        & 68.1\% \\
+F1 (\textit{Delayed})   & 0.475  \\
+\textbf{Macro F1 binário} & \textbf{0.623} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O Estágio 1 atinge Macro F1~=~\textbf{0.623}, o melhor resultado binário do projeto.
+O ganho face ao MLP triclasse (0.42) explica-se pela menor assimetria da partição
+binária (73/27 vs 73/10/17) e pela concentração de toda a capacidade da rede numa
+única fronteira de decisão.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.75\columnwidth]{17_stage_1_confusion_matrix_threshold05.png}
+    \caption{Matriz de confusão — Estágio 1 binário (\textit{On-time} vs \textit{Delayed}, threshold = 0.5). Com Macro F1 = 0.623, é o melhor classificador do projeto para a questão operacionalmente mais relevante.}
+    \label{fig:cm_stage1_binary}
+\end{figure}
+
+O composto triclasse — obtido por \textit{binning} da saída do Estágio 2 em Short
+($<$30 min) e Long ($\geq$30 min) — é apresentado na comparação global
+(Tabela~\ref{tab:global}).
+
+\subsubsection{MLP Hierárquico de 3 Estágios (Proposta do Docente)}
+
+A grande maioria dos voos é pontual ($\approx$73\%), o que distorce qualquer
+regressor global para valores próximos de zero. O modelo hierárquico de 2 estágios
+já aborda este problema ao treinar o Estágio 2 apenas em voos atrasados. No entanto,
+o único regressor do Estágio 2 cobre o intervalo $[15, +\infty)$ com um único
+conjunto de pesos — misturando o aglomerado denso 15–30 min com a cauda longa e
+pesada dos atrasos prolongados.
+
+A solução proposta pelo docente estende a cascata para \textbf{três estágios}:
+
+\begin{itemize}
+\item \textbf{Estágio 1:} Classificador triclasse nativo (softmax de 3 saídas),
+      \texttt{class\_weight=`balanced'} + \texttt{MacroF1Monitor}. Fornece
+      diretamente métricas de classificação comparáveis ao MLP plano.
+\item \textbf{Estágio 2a:} Regressor treinado \emph{apenas} nos voos Short
+      (15–30 min). Alvo estreito e limitado: o MSE é mais fácil de minimizar.
+\item \textbf{Estágio 2b:} Regressor treinado \emph{apenas} nos voos Long
+      ($>$30 min). Especializado na cauda pesada, sem interferência do
+      aglomerado 15–30 min.
+\item \textbf{Inferência:} Cada voo é encaminhado pelo Estágio 1; os voos preditos
+      como Short ou Long entram no regressor correspondente.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{3-Estágios — Classificação (Estágio 1) e Regressão (Estágios 2a/2b)}
+\label{tab:three_stage}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Estágio / Scope} & \textbf{RMSE} & \textbf{MAE} & \textbf{R\textsuperscript{2}} & \textbf{Macro F1} & \textbf{Acc.} \\
+\midrule
+Estágio 1 (classif. 3cl.) & — & — & — & 0.33 & 45.8\% \\
+Estágio 2a (Short subset) & 6.03 & 5.10 & $-0.754$ & — & — \\
+Estágio 2b (Long subset)  & 124.75 & 62.23 & $-0.324$ & — & — \\
+E2E cascata (completo)    & 58.72  & 26.09 & —  & — & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+O resultado mais relevante é o Estágio 2a: \textbf{MAE = 5.10 min, RMSE = 6.03 min}
+no subconjunto \textit{Short} — um ganho de $\approx 9\times$ face ao regressor único
+do modelo de 2 estágios (MAE = 45.73 min). Este ganho resulta exclusivamente da
+especialização: o modelo 2a não vê um único voo pontual ou de longo atraso durante o
+treino. O MAE de ponta a ponta da cascata completa é de \textbf{26.09 min},
+substancialmente melhor do que a regressão plana (36.40 min).
+
+O custo da cascata é o \textbf{erro composto}: um voo \textit{Long} classificado
+como \textit{Short} é encaminhado para o regressor 2a, cuja saída está limitada a
+$\approx$30 min, produzindo um erro elevado. Este trade-off é medido pelas métricas
+de ponta a ponta vs. as métricas do subconjunto verdadeiro.
+
+% ---
+\subsection{Agrupamento (Clustering)}
+
+\subsubsection{Entidade e Features}
+
+O clustering foi aplicado a \textbf{aeroportos} (entidade operacional natural) e não
+a voos individuais. Os dados foram agregados por código IATA de origem com filtro de
+mínimo 30 voos, resultando em \textbf{306 aeroportos} representados por 13 features:
+volume de tráfego (\texttt{n\_flights}), alcance da rede (\texttt{n\_destinations},
+\texttt{n\_airlines}), estatísticas de atraso (média, desvio-padrão, mediana,
+percentagem de cada classe) e perfil de rota (distância média, tempo de voo
+planeado). Todas foram normalizadas com \textit{StandardScaler} antes do clustering.
+
+\subsubsection{K-Means — Varredura sobre $k$}
+
+\begin{table}[h]
+\centering
+\caption{K-Means — Métricas por $k$ (306 aeroportos)}
+\label{tab:kmeans}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{ccccc}
+\toprule
+$k$ & Inércia & Silhouette & D.-Bouldin & C.-Harabász \\
+\midrule
+2 & 3\,233 & 0.193 & 1.845 & 70 \\
+\textbf{3} & \textbf{2\,689} & \textbf{0.208}$^{\dagger}$ & 1.501 & \textbf{73}$^{\dagger}$ \\
+4 & 2\,371 & 0.185 & 1.490 & 68 \\
+5 & 2\,152 & 0.195 & 1.454 & 64 \\
+6 & 2\,006 & 0.169 & 1.667 & 59 \\
+7 & 1\,893 & 0.189 & 1.550 & 55 \\
+8 & 1\,786 & 0.184 & 1.559 & 52 \\
+\bottomrule
+\multicolumn{5}{l}{$^\dagger$Máximo — $k=3$ selecionado pelo cotovelo e Silhouette.} \\
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{K-Means $k=3$ — Perfis Operacionais}
+\label{tab:kmeans_clusters}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.3cm}p{0.5cm}p{1.7cm}p{1.0cm}p{0.6cm}p{0.7cm}}
+\toprule
+\textbf{C} & \textbf{N} & \textbf{Top aeroportos} & \textbf{\={x} atraso} & $\sigma$ & \textbf{Pontual} \\
+\midrule
+0 & 35  & ASE, JAC, PGD & 44.9 min & 117 & 65\% \\
+1 & 152 & HNL, BUR, LGB & 19.0 min & 55  & \textbf{78\%} \\
+2 & 119 & ATL, DFW, ORD & 20.5 min & 60  & 74\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{19_k_means_sweep_over_k_airport.png}
+    \caption{K-Means — varredura sobre $k$: inércia (cotovelo), Silhouette e Davies-Bouldin. O cotovelo suaviza-se em $k=3$, que também maximiza o Silhouette, justificando a seleção de $k=3$.}
+    \label{fig:kmeans_sweep}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{20_k_means_clusters_k3_airport.png}
+    \caption{Projeção PCA dos 306 aeroportos colorida pelos 3 clusters K-Means. O Cluster 0 (azul, regional/lazer) separa-se claramente dos Clusters 1 e 2 ao longo do PC1 (28.9\% da variância), que captura principalmente o volume de tráfego.}
+    \label{fig:kmeans_pca}
+\end{figure}
+
+\textbf{Cluster 0 — Regional/Lazer:} Pequenos aeroportos de resort (Aspen, Jackson
+Hole). $\sigma = 117$ min — o mais elevado — reflete exposição meteorológica extrema.
+\textbf{Cluster 1 — Mainstream Médio:} 152 aeroportos com melhor taxa de pontualidade
+(78\%) e perfil operacional disciplinado. \textbf{Cluster 2 — Grandes Hubs:} ATL,
+DFW, ORD com média de 2.280 voos/aeroporto. Atrasos apenas marginalmente superiores
+ao Cluster 1, demonstrando eficiência operacional à escala.
+
+\subsubsection{DBSCAN}
+
+\begin{table}[h]
+\centering
+\caption{DBSCAN — Resultados Selecionados ($\texttt{min\_samples}=5$)}
+\label{tab:dbscan}
+\begin{tabular}{cccc}
+\toprule
+$\varepsilon$ & N. Clusters & N. Ruído & Silhouette \\
+\midrule
+0.50 & 0  & 306 & — \\
+1.00 & 2  & 275 & 0.223 \\
+\textbf{1.50} & \textbf{2} & \textbf{158} & \textbf{0.275} \\
+2.00 & 1  & 86  & — \\
+3.00 & 1  & 23  & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+No melhor $\varepsilon = 1.5$, o DBSCAN classifica \textbf{158 de 306 aeroportos
+(52\%) como ruído}~\cite{dbscan}. Este é um \textbf{diagnóstico estrutural}: o espaço
+de features dos aeroportos é um gradiente contínuo, não um conjunto de aglomerados
+densos. O DBSCAN, que recusa impor partições onde os dados não as justificam,
+diagnostica corretamente esta geometria.
+
+\subsubsection{Agglomerative Ward ($k=4$)}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\columnwidth]{23_agglomerative_ward_dendrogram_airport_last_30_merges.png}
+    \caption{Dendrograma Ward (últimas 30 fusões, 306 aeroportos). A grande distância entre os dois ramos principais (~37 unidades Ward) confirma a separação do grupo regional/lazer. A segunda cisão (~30 unidades) corresponde à divisão entre médio porte e mega-hubs.}
+    \label{fig:dendrogram}
+\end{figure}
+
+Silhouette~=~0.156, Davies-Bouldin~=~1.595. O algoritmo hierárquico~\cite{ward}
+reproduz exatamente os Clusters 0 e 1 do K-Means e \textbf{subdivide o Cluster 2}
+em aeroportos grande-médio (90 aeroportos, 768 voos/aeroporto) e mega-hubs
+(31 aeroportos, 6.214 voos/aeroporto). A convergência entre K-Means e Agglomerative
+— funções objetivo distintas — nas mesmas categorias operacionais é
+\textbf{evidência de que estas categorias são intrínsecas aos dados}, não artefactos
+algorítmicos.
+
+\begin{table}[h]
+\centering
+\caption{Comparação de Algoritmos de Clustering}
+\label{tab:cluster_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Algoritmo} & \textbf{N. Clusters} & \textbf{Silhouette} & \textbf{D.-Bouldin} \\
+\midrule
+K-Means ($k=3$)             & 3             & 0.208 & 1.501 \\
+DBSCAN ($\varepsilon=1.5$)  & 2 + 158 ruído & 0.275$^*$ & — \\
+Agglomerative ($k=4$)       & 4             & 0.156 & 1.595 \\
+\bottomrule
+\multicolumn{4}{l}{$^*$Calculado apenas nos pontos não classificados como ruído.} \\
+\end{tabular}
+\end{table}
+
+% ---------------------------------------------------------------
+\section{Fase 5: Comparação e Avaliação de Modelos}
+
+\subsection{Tabela Comparativa Global — Classificação}
+
+\begin{table}[h]
+\centering
+\caption{Comparação Global — Todos os Modelos de Classificação}
+\label{tab:global}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{p{2.5cm}cccccc}
+\toprule
+\textbf{Modelo} & \textbf{Tipo} & \textbf{Acc.} & \textbf{F1\textsubscript{ON}} & \textbf{F1\textsubscript{SH}} & \textbf{F1\textsubscript{LG}} & \textbf{Macro F1} \\
+\midrule
+KNN ($k=5$)              & 3cl & 60\%   & 0.72 & 0.14 & 0.25 & 0.37 \\
+Árvore Decisão           & 3cl & 55\%   & 0.67 & 0.17 & 0.26 & 0.37 \\
+Reg. Logística           & 3cl & 57\%   & 0.70 & 0.15 & 0.23 & 0.36 \\
+RF (Exp.~1)              & 3cl & 63\%   & 0.76 & 0.21 & 0.10 & 0.35 \\
+HGB (Exp.~1)             & 3cl & 65\%   & 0.77 & 0.24 & 0.13 & 0.38 \\
+MLP Plano (Exp.~1)       & 3cl & 70.0\% & 0.84 & 0.25 & 0.17 & 0.42 \\
+MLP 2-Est. (composto)    & 3cl & 57.2\% & 0.72 & 0.00 & 0.34 & 0.36 \\
+MLP 3-Est. (Estágio 1)   & 3cl & 45.8\% & 0.62 & 0.17 & 0.20 & 0.33 \\
+\midrule
+\textbf{MLP 2-Est. Stage~1} & \textbf{2cl} & \textbf{68.1\%} & \multicolumn{3}{c}{(tarefa binária)} & \textbf{0.623} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tabela Comparativa Global — Regressão}
+
+\begin{table}[h]
+\centering
+\caption{Comparação Global — Modelos de Regressão}
+\label{tab:global_reg}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{2.5cm}cccc}
+\toprule
+\textbf{Modelo / Scope} & \textbf{RMSE} & \textbf{MAE} & \textbf{R\textsuperscript{2}} \\
+\midrule
+MLP plana (completo)            & 303.52 & 36.40 & $-28.04$ \\
+MLP 2-Est. Stage~2 (atrasados)  & 93.14  & 45.73 & $-0.009$ \\
+MLP 3-Est. Stage~2b (Long)      & 124.75 & 62.23 & $-0.324$ \\
+\textbf{MLP 3-Est. Stage~2a (Short)}  & \textbf{6.03} & \textbf{5.10} & $-0.754$ \\
+MLP 3-Est. E2E (cascata)        & 58.72  & 26.09 & — \\
+\bottomrule
+\multicolumn{4}{l}{\small Todos os regressores treinados apenas em voos do subconjunto correspondente.}\\
+\end{tabular}
+\end{table}
+
+\subsection{Forças e Fraquezas por Modelo}
+
+\paragraph{KNN} Vantagem: sem parâmetros de treino, interpretável, útil como
+\textit{baseline}. Desvantagem: custo $O(N \cdot d)$ inviabiliza produção; sem
+interações complexas.
+
+\paragraph{Árvore de Decisão / Regressão Logística} Vantagem: interpretáveis,
+rápidos. Desvantagem: a árvore tende a \textit{overfit}; a regressão logística falha
+em capturar não-linearidades. Ambos ficam abaixo do HGB.
+
+\paragraph{Random Forest / HGB} Vantagem: RF é robusto a \textit{outliers};
+HGB é $5$–$10\times$ mais rápido e apresenta o melhor Macro F1 entre os modelos sklearn.
+Desvantagem: treino sequencial do HGB limita paralelização.
+
+\paragraph{MLP Plano (Exp.~1)} Melhor classificador triclasse (Macro F1~=~0.42).
+O \texttt{MacroF1Monitor} resolve o colapso maioritário. Desvantagem: sensível a
+hiperparâmetros; requer GPU para larga escala.
+
+\paragraph{MLP Hierárquico 2 Estágios} Melhor classificador binário (Macro F1~=~0.623).
+O Estágio 1 concentra a capacidade na fronteira mais útil. Desvantagem: o composto
+triclasse perde F1 de Short (0.00) ao trocar por Long (0.34).
+
+\paragraph{MLP Hierárquico 3 Estágios} Melhor MAE de ponta a ponta (26.09 min) e
+melhor precisão no subconjunto Short (MAE~=~5.10 min). Desvantagem: erros compostos
+quando o Estágio 1 confunde Short e Long; três modelos a manter em produção.
+
+\subsection{Limitação Fundamental: Piso de Ruído Irreducível}
+
+O resultado negativo mais informativo do projeto é o $R^2$ da regressão: mesmo o
+Stage~2a (melhor caso, apenas 15 min de intervalo alvo) produz $R^2 = -0.754$. O
+Stage~2 do modelo de 2 estágios, treinado exclusivamente em voos atrasados — o
+cenário mais favorável — produz $R^2 \approx -0.009$. Ambos são incapazes de superar
+um preditor de média. Isto demonstra que \textbf{a variância do atraso ao minuto é
+dominada por eventos do dia ausentes do dataset} (meteorologia real, aeronave em
+atraso em cascata, eventos ATC), e não por features pré-partida.
+
+O MAE irredutível de $\approx 26$ min é mais largo do que toda a banda \textit{Short
+delay} (15 min), explicando mecanicamente o baixo F1 desta classe em todos os modelos.
+
+% ---------------------------------------------------------------
+\section{Fase 6: Operacionalização}
+
+\subsection{Modelo Recomendado para Produção}
+
+O \textbf{Estágio 1 do modelo hierárquico de 2 estágios} (MLP binário, Macro
+F1~=~0.623, acurácia 68.1\%) é o \textit{deliverable} operacional primário. A
+questão binária \textit{«vai atrasar?»} tem o melhor sinal nas features pré-partida e
+é a mais acionável para companhias aéreas e passageiros. Para casos de uso que
+requeiram granularidade triclasse (e.g., priorização de recursos), o modelo
+hierárquico completo de 2 estágios é preferível ao MLP plano pelo ganho em F1 de
+\textit{Long delay} (0.34 vs 0.17). O modelo de 3 estágios é recomendado quando a
+estimativa de minutos de atraso é igualmente importante: o MAE de ponta a ponta
+de 26 min é o melhor alcançável com as features disponíveis.
+
+\subsection{Plano de Deployment}
+
+\begin{enumerate}
+\item \textbf{Persistência:} Serializar os pesos do Estágio 1 em formato
+      \texttt{.keras} (TensorFlow SavedModel), os dos Estágios 2a/2b em \texttt{.keras},
+      e os encoders/scalers em \texttt{.pkl} (joblib). Versionar no repositório GitHub.
+\item \textbf{API de inferência:} Expor o pipeline como endpoint REST (FastAPI).
+      \textit{Input:} features pré-partida — rota, companhia, horário, distância, data.
+      \textit{Output:} probabilidade de atraso, classe predita.
+\item \textbf{Re-aplicação do pré-processamento:} Os \textit{LabelEncoders} e
+      \textit{StandardScalers} ajustados no treino devem ser aplicados a cada pedido.
+      O \texttt{AVG\_DELAY\_PER\_HOUR} (target encoding) deve ser recalculado
+      periodicamente com dados recentes para capturar drift nos padrões horários.
+\item \textbf{Re-treino periódico:} Re-treino trimestral com os dados mais recentes
+      do DOT's On-Time Performance Reporting System para capturar mudanças sazonais
+      nos padrões operacionais.
+\item \textbf{Monitorização em produção:} Acompanhar drift nas distribuições de
+      entrada (novas companhias, mudanças de rota) e degradação do Macro F1 em dados
+      de produção rotulados a posteriori.
+\end{enumerate}
+
+\subsection{Melhorias Futuras}
+
+Para superar o piso de ruído identificado, as principais melhorias passam por:
+
+\begin{itemize}
+\item \textbf{Features do dia-de:} Previsão meteorológica na janela de
+      partida/chegada; histórico recente de atrasos da aeronave (número de cauda);
+      lotação do espaço aéreo prevista (NAS delay forecast). Estas são as variáveis
+      que dominam a variância residual e cuja ausência impõe o piso $R^2 < 0$.
+\item \textbf{Enriquecimento com clustering:} Incorporar o perfil de cluster do
+      aeroporto de origem (regional/médio/hub/mega-hub) como feature categórica nos
+      modelos preditivos, capturando características operacionais sistémicas.
+\item \textbf{Modelos especializados por contexto:} Treinar modelos separados por
+      companhia aérea ou corredor de tráfego, capturando padrões operacionais
+      idiossincráticos que o modelo global não consegue aprender.
+\item \textbf{Escalabilidade do KNN:} Substituir a pesquisa por força bruta por
+      KD-Tree ou Ball-Tree (sklearn), permitindo avaliação no conjunto de teste
+      completo e comparação direta com os restantes modelos.
+\end{itemize}
+
+% ---------------------------------------------------------------
+\section{Conclusão}
+
+Este projeto percorreu as Fases 4–6 do ciclo de vida de Data Science aplicado à
+previsão de atrasos de voos comerciais domésticos nos EUA. A Fase 4 produziu seis
+famílias de modelos com resultados coerentes e complementares: KNN como
+\textit{baseline} não-paramétrico, modelos supervisionados clássicos, ensemble
+(RF + HGB) com Macro F1~$\approx$~0.38, e três variantes MLP — plano,
+hierárquico binário e hierárquico triclasse.
+
+O \textbf{melhor classificador} do projeto é o Estágio 1 binário do MLP hierárquico
+de 2 estágios: Macro F1~=~0.623, com um design operacionalmente motivado (a questão
+binária \textit{«vai atrasar?»} é a mais relevante e a que tem mais sinal nas
+features pré-partida). O \textbf{melhor resultado de regressão} é o MAE~=~5.10 min
+do Estágio 2a do modelo de 3 estágios no subconjunto \textit{Short delay} — um ganho
+de $9\times$ face ao regressor único.
+
+O \textbf{resultado negativo} mais relevante é igualmente preciso: a previsão ao
+minuto de ARR\_DELAY é fundamentalmente impraticável com features pré-partida
+disponíveis ($R^2 < 0$ em todos os cenários). O MAE irredutível de $\approx$26 min
+quantifica o piso de ruído imposto pelos eventos do dia ausentes do dataset e motiva
+a priorização da formulação como classificação e especificamente do Estágio 1 binário
+como produto operacional.
+
+O diagnóstico e correção do bug estrutural \texttt{class\_weight} $\times$
+\texttt{EarlyStopping} — com o callback \texttt{MacroF1Monitor} como solução
+mínima e suficiente — constitui uma contribuição técnica diretamente aplicável
+a qualquer problema de classificação multiclasse desequilibrada em Keras.
+A fase de clustering identificou três categorias operacionais intrínsecas aos dados
+(regional/lazer, mainstream-médio, grandes hubs), convergentemente detetadas por
+K-Means e Agglomerative Ward com funções objetivo distintas.
+
+% ---------------------------------------------------------------
+\begin{thebibliography}{00}
+
+\bibitem{dataset}
+U.S. Department of Transportation, ``Flight Delay and Cancellation Dataset
+(2019–2023),'' Kaggle. [Online]. Disponível:
+\url{https://www.kaggle.com/datasets/patrickzel/flight-delay-and-cancellation-dataset-2019-2023/data}
+
+\bibitem{tensorflow}
+M.~Abadi \textit{et al.}, ``TensorFlow: Large-Scale Machine Learning on
+Heterogeneous Systems,'' 2015. [Online]. Disponível: \url{https://www.tensorflow.org}
+
+\bibitem{sklearn}
+F.~Pedregosa \textit{et al.}, ``Scikit-learn: Machine Learning in Python,''
+\textit{Journal of Machine Learning Research}, vol.~12, pp.~2825--2830, 2011.
+
+\bibitem{breiman}
+L.~Breiman, ``Random Forests,'' \textit{Machine Learning}, vol.~45, pp.~5--32, 2001.
+
+\bibitem{friedman}
+J.~H.~Friedman, ``Greedy Function Approximation: A Gradient Boosting Machine,''
+\textit{Annals of Statistics}, vol.~29, no.~5, pp.~1189--1232, 2001.
+
+\bibitem{kmeans}
+J.~MacQueen, ``Some Methods for Classification and Analysis of Multivariate
+Observations,'' \textit{Proc.\ 5th Berkeley Symp.\ on Mathematical Statistics
+and Probability}, vol.~1, pp.~281--297, 1967.
+
+\bibitem{dbscan}
+M.~Ester, H.-P.~Kriegel, J.~Sander e X.~Xu, ``A Density-Based Algorithm for
+Discovering Clusters in Large Spatial Databases with Noise,''
+\textit{Proc.\ KDD}, pp.~226--231, 1996.
+
+\bibitem{ward}
+J.~H.~Ward, ``Hierarchical Grouping to Optimize an Objective Function,''
+\textit{Journal of the American Statistical Association}, vol.~58, no.~301,
+pp.~236--244, 1963.
+
+\bibitem{cover}
+T.~Cover e P.~Hart, ``Nearest Neighbor Pattern Classification,''
+\textit{IEEE Transactions on Information Theory}, vol.~13, no.~1,
+pp.~21--27, 1967.
+
+\end{thebibliography}
+
+\end{document}
