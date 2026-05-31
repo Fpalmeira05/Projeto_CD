@@ -11,5 +11,5 @@ Projeto desenvolvido no âmbito da unidade curricular de Ciência de Dados (3º 
 
 *Nota: A pasta de datasets não está incluída no repositório por motivos de tamanho/privacidade.*
 
-## Link para o data set
+## Link para o data set e Zip dos modelos
 https://testuma-my.sharepoint.com/:f:/g/personal/2099223_student_uma_pt/IgCQ-FKierm4SZ6wP8BuLZ7sAaqUnl-9cCHxhs3ekPCNE6U?e=84ORR9
