@@ -12,4 +12,4 @@ Projeto desenvolvido no âmbito da unidade curricular de Ciência de Dados (3º 
 *Nota: A pasta de datasets não está incluída no repositório por motivos de tamanho/privacidade.*
 
 ## Link para o data set
-https://1drv.ms/x/c/afaa5f457d41ec21/IQDdA8QeaEJjT5KcNzTDdh7fAVbfkk5fYFsZTn_rHRomrTE?e=t1nc2s
+https://testuma-my.sharepoint.com/:f:/g/personal/2099223_student_uma_pt/IgCQ-FKierm4SZ6wP8BuLZ7sAaqUnl-9cCHxhs3ekPCNE6U?e=84ORR9
